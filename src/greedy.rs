@@ -1602,6 +1602,42 @@ mod tests {
         }
     }
 
+    /// Qualite de la borne de Temple utilisee pour certifier l'elimination arriere :
+    /// l'ecart a la vraie `lambda_min(R_{-i})` pilote directement le nombre de
+    /// candidats evalues exactement, et decroit comme `1/p` — il faudrait `p = k`
+    /// (spectre complet) pour le rendre nul.
+    #[test]
+    fn deletion_bound_quality() {
+        let mut dm = generate(GenKind::Blocks, 600, 60, 0.5, 0.05, 4, 1, 3);
+        dm.standardize(true);
+        let ds = Dataset::new(dm, Repr::Packed, usize::MAX, 16);
+        let cfg = AlgoConfig { tol: 1e-13, max_iters_cold: 4000, max_iters_warm: 400, ..Default::default() };
+        let k = 60usize;
+        let mut prev_mean = f64::INFINITY;
+        for p in [4usize, 8, 16] {
+            let spec = low_spectrum(&ds, k, p, &[], None, &cfg, true);
+            let (rq, y) = head_rayleigh(&ds, k, &spec.vectors[0]);
+            let mut gaps = Vec::new();
+            let mut exacts = Vec::new();
+            for i in 0..k {
+                let idx: Vec<usize> = (0..k).filter(|&j| j != i).collect();
+                let mut a = dense_sub(&ds, &idx);
+                let (vals, _) = eigen_sym_sorted(&mut a, k - 1);
+                let ray = rayleigh_upper(rq, spec.vectors[0][i], y[i]);
+                let ub = spec.upper_bound(i, ray);
+                assert!(ub >= vals[0] - 1e-8, "borne invalide i={i} : {ub} < {}", vals[0]);
+                gaps.push(ub - vals[0]);
+                exacts.push(vals[0]);
+            }
+            exacts.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let spread = exacts[exacts.len() - 1] - exacts[0];
+            let mean = gaps.iter().sum::<f64>() / gaps.len() as f64;
+            assert!(mean < prev_mean, "l'ecart doit decroitre avec p");
+            prev_mean = mean;
+            eprintln!("p={p:<3} : ecart moyen={mean:.3e} ({:.1}% de l'etendue)", 100.0 * mean / spread);
+        }
+    }
+
     /// La graine seculaire de suppression doit etre de dimension `k-1` (vecteur de
     /// l'operateur `R_{-i}`) : c'est ce qui la rend exploitable par Lanczos. Tant
     /// qu'elle gardait la composante `i`, le solveur la rejetait (longueur `k`) et

@@ -84,6 +84,25 @@ d'origine était donc rompue et la revalidation portait sur un autre sous-ensemb
 `head_subset_dataset`, avec le test de régression
 `head_subset_dataset_validates_the_right_subset`.
 
+## Ce qui reste (identifié, non implémenté)
+
+Le chemin avant est essentiellement optimal : la borne exacte ramène les évaluations
+au plancher du lot (8/étape) et le coût dominant est le spectre complet de `R_S`
+(`k` Lanczos à chaud par étape).
+
+Le chemin **arrière** garde un facteur ~7 : sa borne de Temple laisse 40,6 % de
+l'étendue des candidats à `p = 4` (24,1 % à `p = 8`, 12,3 % à `p = 16` — cf. le test
+`deletion_bound_quality`), d'où ~57 évaluations exactes par étape au lieu de 8. La
+rendre exacte exige `p = k`, donc le spectre complet, qu'il faudrait **maintenir
+incrémentalement** d'une étape à l'autre (entrelacement de Cauchy + équation
+séculaire) pour que le coût par étape devienne `O(k³)` au lieu de `O(e·t·k²)`. C'est
+un changement d'algorithme (solveur propre incrémental), pas un réglage ; il n'a pas
+été tenté ici.
+
+Une piste plus modeste : augmenter `--low-rank` est un mauvais compromis mesuré — à
+`p = 16` les évaluations baissent de ~20 %, mais le spectre coûte 4× plus cher, pour un
+temps total dans le bruit (±10 %).
+
 ## Reproductibilité
 
 ```bash

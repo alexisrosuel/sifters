@@ -606,6 +606,14 @@ Mieux, en mode exact la borne est **exacte** (`p = k`), donc `e` tombe au planch
   longue, cette indétermination peut faire diverger la suite des sous-ensembles. Les
   étapes restent optimales *à la marge près* (vérifié pas à pas contre la force brute
   sur données i.i.d. et corrélées).
+* **La borne d'élimination reste lâche.** `deletion_bound_quality` mesure l'écart
+  moyen borne-exact en fraction de l'étendue des `λ_min` candidats : **40,6 %** à
+  `p = 4`, 24,1 % à `p = 8`, 12,3 % à `p = 16` — soit une décroissance en `1/p`. C'est
+  ce qui impose d'évaluer exactement ~15 à 25 % des candidats à chaque étape arrière.
+  La rendre exacte demanderait `p = k` (spectre complet, coût `k` Lanczos par étape) ;
+  la voie rentable serait un **spectre complet maintenu incrémentalement** d'une étape
+  à l'autre (entrelacement de Cauchy + équation séculaire), qui ramènerait le coût
+  par étape à `O(k³)` au lieu de `O(e·t·k²)`. Non implémenté à ce jour.
 
 ---
 
