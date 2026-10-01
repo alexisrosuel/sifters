@@ -1,0 +1,39 @@
+[workspace]
+members = ["crates/minvp-python"]
+# `cargo build --release` a la racine ne construit que le binaire/la librairie
+# Rust ; l'extension Python se construit via `maturin develop` (ou
+# `cargo build -p minvp-python`).
+default-members = ["."]
+
+[package]
+name = "minvp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "E-optimal feature subset selection: greedy maximization of the smallest eigenvalue of a correlation matrix, multicore, 100% safe Rust."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rayon = "1.12"
+
+[dev-dependencies]
+
+[[bin]]
+name = "minvp"
+path = "src/main.rs"
+
+[lib]
+name = "minvp"
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+panic = "unwind"
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
