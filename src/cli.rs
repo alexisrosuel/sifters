@@ -168,7 +168,9 @@ ALGORITHME
   --iters-warm N           iterations max a chaud (def. 60)
   --max-exact N            candidats evalues exactement par etape (0 = illimite)
   --batch N                taille des lots paralleles (def. 8)
-  --low-rank P             couples propres p utilises par la borne de Temple (def. 4)
+  --low-rank P             couples propres p utilises par la borne de Temple (def. 4).
+                           Sans effet en selection avant certifiee (--forward-top 0),
+                           qui utilise le spectre complet : la borne y est alors exacte.
   --eval auto|direct|inverse   evaluation des candidats par l'inverse maintenu (def. auto)
   --forward-top N          pre-filtre avant : n'evalue que les N meilleurs candidats
                            (0 = desactive -> chaque etape est certifiee optimale

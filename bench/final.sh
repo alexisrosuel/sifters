@@ -19,6 +19,7 @@ SCENARIOS=(
   "fwd400|--gen blocks --gen-n 500 --gen-m 400 --blocks 8 --dir forward --kmax 50"
   "fwd800|--gen blocks --gen-n 500 --gen-m 800 --blocks 8 --dir forward --kmax 50"
   "fwd3200|--gen blocks --gen-n 500 --gen-m 3200 --blocks 8 --dir forward --kmax 50"
+  "fwd1600k150|--gen blocks --gen-n 500 --gen-m 1600 --blocks 8 --dir forward --kmax 150"
   "bwd200|--gen blocks --gen-n 600 --gen-m 200 --blocks 8 --dir backward --kmin 1"
   "bwd500d|--gen blocks --gen-n 600 --gen-m 500 --blocks 8 --dir backward --kmin 200 --eval direct"
   "bwd500i|--gen blocks --gen-n 600 --gen-m 500 --blocks 8 --dir backward --kmin 200 --eval inverse"

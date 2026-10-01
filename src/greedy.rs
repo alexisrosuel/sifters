@@ -1251,7 +1251,14 @@ pub fn forward(
                 iters,
                 converged: best.out.converged,
             });
-            spec = low_spectrum(ds, k, cfg.num_low, &seeds, carry.as_ref(), cfg, false);
+            // En mode exact certifie, on demande le **spectre complet** (`p = k`) :
+            // la racine seculaire tronquee devient alors *exacte* (cf.
+            // `forward_secular_bound_quality` : ecart ~1e-15), la certification
+            // s'arrete donc au premier lot, et le cout du spectre (k Lanczos a
+            // chaud) est tres inferieur aux evaluations qu'il economise. Le
+            // pre-filtre, lui, reste regle par `--low-rank`.
+            let p_spec = if top == 0 { k } else { cfg.num_low };
+            spec = low_spectrum(ds, k, p_spec, &seeds, carry.as_ref(), cfg, false);
         }
     }
     PathResult {
@@ -1674,42 +1681,54 @@ mod tests {
         let mut dm = generate(GenKind::Blocks, 500, 140, 0.3, 0.0, 8, 1, 4);
         dm.standardize(true);
         let ds = Dataset::new(dm, Repr::Packed, usize::MAX, 16);
-        let cfg = AlgoConfig { tol: 1e-13, max_iters_cold: 3000, ..Default::default() };
-        let p = ds.packed.as_ref().expect("packed");
-        for k in [10usize, 30, 60] {
-            let spec = low_spectrum(&ds, k, 4, &[], None, &cfg, true);
-            let mut g = vec![0.0f64; spec.values.len()];
-            let mut worst = 0.0f64;
-            let mut sum = 0.0f64;
-            let mut n = 0usize;
-            for j in k..ds.m() {
-                for l in 0..spec.values.len() {
-                    let c: f64 = (0..k).map(|i| p.get(i, j) * spec.vectors[l][i]).sum();
-                    g[l] = c;
-                }
-                let ub = addition_secular(&spec.values, &g);
-                // exact : Jacobi sur la matrice bordee
-                let d = k + 1;
-                let mut a = vec![0.0; d * d];
-                for x in 0..k {
-                    for y in 0..k {
-                        a[x * d + y] = p.get(x, y);
+        let pk = ds.packed.as_ref().expect("packed");
+        // Deux regimes : spectre bas froid tres strict, et reglages de production
+        // (demarrage a chaud, `max_iters_warm`).
+        let cfgs = [
+            (AlgoConfig { tol: 1e-13, max_iters_cold: 3000, max_iters_warm: 400, ..Default::default() }, true),
+            (AlgoConfig::default(), false),
+        ];
+        for (cfg, cold) in cfgs {
+            for k in [10usize, 30, 60] {
+                for p in [4usize, k] {
+                    let spec = low_spectrum(&ds, k, p, &[], None, &cfg, cold);
+                    assert_eq!(spec.len(), p.min(k));
+                    let mut g = vec![0.0f64; spec.len()];
+                    let mut worst = 0.0f64;
+                    let mut sum = 0.0f64;
+                    let mut n = 0usize;
+                    for j in k..ds.m() {
+                        for l in 0..spec.len() {
+                            g[l] = (0..k).map(|i| pk.get(i, j) * spec.vectors[l][i]).sum();
+                        }
+                        let ub = addition_secular(&spec.values, &g);
+                        let d = k + 1;
+                        let mut a = vec![0.0; d * d];
+                        for x in 0..k {
+                            for y in 0..k {
+                                a[x * d + y] = pk.get(x, y);
+                            }
+                            a[x * d + k] = pk.get(x, j);
+                            a[k * d + x] = pk.get(x, j);
+                        }
+                        a[k * d + k] = 1.0;
+                        let (vals, _) = eigen_sym_sorted(&mut a, d);
+                        assert!(
+                            ub >= vals[0] - 1e-8,
+                            "borne invalide (k={k}, p={p}, cold={cold}) : {ub} < {}",
+                            vals[0]
+                        );
+                        worst = worst.max(ub - vals[0]);
+                        sum += ub - vals[0];
+                        n += 1;
                     }
-                    a[x * d + k] = p.get(x, j);
-                    a[k * d + x] = p.get(x, j);
+                    eprintln!(
+                        "k={k:<3} p={p:<3} cold={cold:<5} : ecart borne-exact moyen={:.3e} max={:.3e}",
+                        sum / n as f64,
+                        worst
+                    );
                 }
-                a[k * d + k] = 1.0;
-                let (vals, _) = eigen_sym_sorted(&mut a, d);
-                assert!(ub >= vals[0] - 1e-9, "borne invalide : {ub} < {}", vals[0]);
-                worst = worst.max(ub - vals[0]);
-                sum += ub - vals[0];
-                n += 1;
             }
-            eprintln!(
-                "k={k}: ecart borne-exact moyen={:.3e} max={:.3e}",
-                sum / n as f64,
-                worst
-            );
         }
     }
 }

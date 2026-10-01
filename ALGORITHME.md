@@ -358,10 +358,11 @@ parallèle sur les colonnes).
 
 ```
 mode exact (forward_top = 0, défaut, CERTIFIÉ)   mode pré-filtre (forward_top = N)
-  ub_j  = racine séculaire tronquée  (majorant)    scored = tri par loss CROISSANTE
-  tri par ub DÉCROISSANTE                          take   = min(N, M−k)
-  évaluer par lots, s'arrêter dès que              évaluer exactement les `take`
-  meilleur_réalisé ≥ ub_suivant − marge            premiers, prendre le meilleur
+  ub_j  = racine séculaire du spectre COMPLET      scored = tri par loss CROISSANTE
+          (p = k : la borne est alors EXACTE)      take   = min(N, M−k)
+  tri par ub DÉCROISSANTE                          évaluer exactement les `take`
+  évaluer par lots, s'arrêter dès que              premiers, prendre le meilleur
+  meilleur_réalisé ≥ ub_suivant − marge
 ```
 
 Aucune bascule automatique selon la taille : par défaut (`forward_top = 0`) la
@@ -371,6 +372,17 @@ s'arrête sur le critère d'optimalité (drapeau `certified`) au lieu d'évaluer
 binding Python (largeur 16, ou `forward_top=N`), `--prefilter` / `--forward-top N`
 en ligne de commande ; il n'évalue alors que les `N` meilleurs du score séculaire et
 perd la certification.
+
+**Pourquoi `p = k` en mode exact.** Avec les `p` premiers couples propres seulement,
+la racine séculaire reste un majorant (les termes de queue sont positifs sous
+`λ_1`) mais lâche : l'écart moyen à l'exact vaut ~10⁻³, ce qui laisse passer des
+dizaines de candidats par la certification. Avec **tout** le spectre de `R_S`, la
+somme séculaire est exacte, donc la racine est *exactement* `λ_min` de la matrice
+bordée (`forward_secular_bound_quality` : écart ~10⁻¹⁵, max 4,5·10⁻¹² aux réglages
+de production). La certification s'arrête alors au premier lot (`batch`), et le coût
+du spectre — `k` Lanczos à chaud, une seule fois par étape — est très inférieur aux
+évaluations qu'il économise (mesuré : 5,5× à 7,8× plus rapide). `--low-rank` reste
+le réglage du pré-filtre et de la cascade arrière.
 
 Chaque candidat retenu est évalué exactement par Lanczos à chaud sur `S ∪ {j}` :
 
@@ -547,7 +559,10 @@ tri, `O(M·p·J)` pour les bornes séculaires (`J` = pas de bissection de
 certification avant, **`e` reste petit** comme en arrière : `take = M−k` n'est plus
 le comportement par défaut, le tri par borne séculaire décroissante permet de
 s'arrêter dès que la meilleure valeur réalisée dépasse la plus grande borne restante.
-Avec le pré-filtre (`forward_top = N > 0`), `e = N` mais sans garantie.
+Mieux, en mode exact la borne est **exacte** (`p = k`), donc `e` tombe au plancher
+`batch` (8) et le coût dominant devient le spectre complet de `R_S` : `O(k)` Lanczos
+à chaud par étape, soit `O(k³)` flops. Avec le pré-filtre (`forward_top = N > 0`),
+`e = N` mais sans garantie.
 
 **Empreinte mémoire.** `packed` : `M(M+1)/2` f64 + `W` (`M²`) si l'inverse est actif ;
 `implicit` : `N·M` seulement.
@@ -631,10 +646,16 @@ Avec le pré-filtre (`forward_top = N > 0`), `e = N` mais sans garantie.
   `total_exact_evals`, `total_lanczos_iters`, `certified_steps`, `order`,
   `initial_subset`, `curve`, `subsets`.
 
-Avant de rendre un sous-ensemble, `main.rs` le **revalide** : il replace les variables
-choisies en tête et relance un Lanczos **froid** très strict (`tol 1e-13`, 4000
-itérations). La valeur affichée est donc une valeur de Ritz certifiée à la tolérance
-près, indépendamment de tout démarrage à chaud.
+Avant de rendre un sous-ensemble demandé (`--subset`), `main.rs` le **revalide** : il
+replace les variables choisies en tête et relance un Lanczos **froid** très strict
+(`tol 1e-13`, 4000 itérations). La valeur affichée est donc une valeur de Ritz
+certifiée à la tolérance près, indépendamment de tout démarrage à chaud.
+
+Point d'attention : `Dataset::new` remet `active` à `0..m` alors que `ds.z` a été
+**permuté** par le parcours. La reconstruction doit donc reprendre la permutation
+courante (`head_subset_dataset`), sans quoi la correspondance position → indice
+d'origine est rompue et la revalidation porte sur un autre sous-ensemble —
+régression couverte par `head_subset_dataset_validates_the_right_subset`.
 
 `order` et `initial_subset` suffisent à reconstruire n'importe quel `S_K` de la famille
 (`Selection::subset_at` du binding Python).

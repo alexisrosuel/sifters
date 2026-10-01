@@ -11,7 +11,7 @@ qui se paie le luxe d'être **exact et certifié** :
 |---|---|
 | 🎯 **Qualité** | critère séculaire (et non une simple corrélation), jusqu'à **+82 %** de `λ_min` à K fixe vs le filtre de corrélation naïf |
 | ✅ **Certificat** | **les deux sens** de parcours sont certifiés : élimination arrière *et* sélection avant s'arrêtent sur une borne supérieure valide par candidat |
-| ⚡ **Vitesse** | **10 000 variables → 100 en 0,7 s** (pré-filtre) ; le glouton exact certifié est **×2 à ×5,6 plus rapide** qu'avant selon la configuration |
+| ⚡ **Vitesse** | **10 000 variables → 100 en 0,7 s** (pré-filtre) ; le glouton exact certifié est **×24 à ×30 plus rapide** en sélection avant, **×2,5 à ×3,5** en élimination arrière |
 | 🦀 **Rust sûr** | `#![forbid(unsafe_code)]`, multicœur (`rayon`), zéro dépendance lourde |
 | 🐍 **Python** | `import minvp; minvp.select(X, k=50)` |
 
@@ -89,7 +89,7 @@ minvp --stdin-f64 --shape 500,400 --dir forward --kmax 50 --out-json - --stdout
 | `--dir backward\|forward` | élimination arrière (famille complète, certifiée) ou ajout glouton (K petit, certifié aussi) |
 | `--kmin K` / `--kmax K` | bornes du parcours |
 | `--eval auto\|direct\|inverse` | évaluation des candidats par l'inverse maintenu (déf. `auto`) |
-| `--low-rank p` | couples propres utilisés par la borne de Temple (déf. 4) |
+| `--low-rank p` | couples propres utilisés par la borne de Temple (déf. 4). Sans effet en sélection avant certifiée, qui utilise le spectre complet |
 | `--tol`, `--iters-warm`, `--iters-cold` | réglages Lanczos |
 | `--max-exact N` | plafond de candidats évalués par étape (0 = certifié) |
 | `--forward-top N`, `--prefilter` | pré-filtre avant, **désactivé par défaut** (`0` = chaque étape est certifiée optimale) |
@@ -151,34 +151,50 @@ la certification et la famille complète.
 
 ### Vitesse
 
-| configuration | temps | candidats évalués |
+Le tableau donne le **mode exact par défaut** (aucun pré-filtre), c'est-à-dire le
+parcours glouton **certifié** ; `N=500` (avant) / `600` (arrière), machine 10 cœurs.
+
+| configuration | temps | candidats évalués exactement |
 |---|---|---|
-| avant, M=10 000 (N=50), K=100, `prefilter=True` | **0.74 s** | 1 584 |
-| avant, M=800 (N=500), K=50, `prefilter=True` | 0.13 s | 784 |
-| avant, M=400 (N=500), K=50, défaut (exact certifié) | **0.36 s** | 10 472 |
-| avant, M=3 200 (N=500), K=50, défaut (exact certifié) | **2.0 s** | 74 368 |
-| arrière complet, M=200 (N=600) | **0.87 s** | 6 235 |
-| arrière, M=500 (N=600), kmin=200, `--eval inverse` | **14.6 s** | 38 392 |
+| avant, M=400, K=50 | **0.2 s** | 392 |
+| avant, M=3 200, K=50 | **0.8 s** | 392 |
+| avant, M=1 600, K=150 | **8.4 s** | 1 192 |
+| avant, M=10 000 (N=50), K=100, `prefilter=True` | 0.74 s | 1 584 |
+| arrière complet, M=200 | **0.85 s** | 6 235 |
+| arrière, M=500, kmin=200, `--eval inverse` | **14.6 s** | 38 392 |
 | idem, `--eval direct` **convergé** (300 itér.) | **102 s** | 33 976 |
 
-> Ces chiffres datent de l'optimisation du chemin exact : la sélection avant est
-> désormais **certifiée** (elle n'évalue plus les `M−K` candidats), l'opérateur bordé
-> exploite la corrélation matérialisée (`O(k²)` au lieu de `O(Nk)` par matvec), et le
-> solveur Lanczos a été allégé (vecteur de Ritz par itération inverse, seconde passe de
-> reorthogonalisation conditionnelle, arrêt sur le résidu). Détail et protocole de
-> mesure dans [`bench/final_report.md`](bench/final_report.md).
-
-**Gain mesuré vs la version précédente** (mêmes entrées, `--no-verify`, `--max-exact 0`,
+**Gain mesuré vs la version d'origine** (mêmes entrées, `--no-verify`, `--max-exact 0`,
 `--forward-top 0`) :
 
 | scénario | avant | après | gain (1 cœur) |
 |---|---|---|---|
-| avant, M=400, K=50 | 5.11 s | 1.03 s | **×4.97** |
-| avant, M=800, K=50 | 9.91 s | 1.86 s | **×5.33** |
-| avant, M=3 200, K=50 | 36.6 s | 6.55 s | **×5.59** |
-| arrière complet, M=200 | 8.74 s | 3.13 s | **×2.79** |
-| arrière, M=500, kmin=200, `inverse` | 193 s | 76.7 s | **×2.52** |
-| arrière, M=500, kmin=200, `direct` convergé | 1835 s | 624 s | **×2.94** |
+| avant, M=400, K=50 | 5.11 s | 0.21 s | **×24** |
+| avant, M=800, K=50 | 9.98 s | 0.36 s | **×28** |
+| avant, M=3 200, K=50 | 36.8 s | 1.22 s | **×30** |
+| avant, M=1 600, K=150 | 266 s | 10.3 s | **×26** |
+| arrière complet, M=200 | 8.75 s | 3.16 s | **×2.8** |
+| arrière, M=500, kmin=200, `inverse` | 193 s | 76.7 s | **×2.5** |
+| arrière, M=500, kmin=200, `direct` convergé | 1835 s | 624 s | **×2.9** |
+
+Ce qui l'explique :
+
+* **la sélection avant est certifiée** : elle n'évalue plus les `M−K` candidats, mais
+  s'arrête dès qu'un majorant valide l'autorise. Mieux, en mode exact elle utilise le
+  **spectre complet** de `R_S`, ce qui rend la borne séculaire *exacte* : les
+  évaluations tombent au plancher du lot (8 par étape) et l'on passe de 2,4 M à 392
+  itérations Lanczos sur `fwd3200` ;
+* **l'opérateur bordé** exploite la corrélation matérialisée (`O(k²)` au lieu de
+  `O(Nk)` par matvec) ;
+* **le solveur Lanczos** est allégé : vecteur de Ritz par itération inverse (au lieu
+  d'une diagonalisation `O(m³)` à chaque appel), seconde passe de reorthogonalisation
+  conditionnelle, arrêt sur le **résidu** de Ritz, suite de Sturm à sortie anticipée ;
+* **la graine séculaire d'élimination est enfin utilisée** (`deletion_seed` la
+  restreignait pas à `R^{k-1}`, le solveur la rejetait silencieusement) : ~30 %
+  d'itérations en moins par candidat ;
+* le matvec de l'inverse maintenu n'a plus de branche par élément.
+
+Détail et protocole de mesure dans [`bench/final_report.md`](bench/final_report.md).
 
 ### Vitesse vs une implémentation naïve 100 % Python / numpy
 

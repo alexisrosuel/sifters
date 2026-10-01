@@ -169,12 +169,7 @@ fn run(cfg: &Config) -> Result<(), String> {
                     set.iter().map(|&i| keep_map.get(i).copied().unwrap_or(i)).collect();
                 // verification : on replace les variables choisies en tete puis on
                 // recalcule lambda_min sans demarrage a chaud.
-                let mut check = Dataset::new(ds.z.clone(), repr_of(&ds), budget, cfg.block_rows);
-                for (pos, &orig) in set.iter().enumerate() {
-                    if let Some(cur) = check.active.iter().position(|&x| x == orig) {
-                        check.swap(pos, cur);
-                    }
-                }
+                let check = head_subset_dataset(&ds, &set, budget, cfg.block_rows);
                 let ev = greedy::initial_eigenpair_public(&check, k, &strict);
                 if !cfg.quiet {
                     eprintln!(
@@ -275,5 +270,81 @@ fn _repr_doc(r: Repr) -> &'static str {
         Repr::Auto => "auto",
         Repr::Packed => "packed",
         Repr::Implicit => "implicit",
+    }
+}
+
+/// Reconstruit un [`Dataset`] ou les variables `set` (indices d'origine) occupent
+/// le bloc de tete, en conservant la permutation courante de `ds`.
+///
+/// Indispensable : apres un parcours, `ds.z` est permute, alors que
+/// `Dataset::new` remet `active` a `0..m`. Sans cette reprise, la correspondance
+/// position -> indice d'origine serait rompue et la revalidation porterait sur un
+/// autre sous-ensemble.
+fn head_subset_dataset(
+    ds: &Dataset,
+    set: &[usize],
+    budget: usize,
+    block_rows: usize,
+) -> Dataset {
+    let mut check = Dataset::new(ds.z.clone(), repr_of(ds), budget, block_rows);
+    check.active.copy_from_slice(&ds.active);
+    for (pos, &orig) in set.iter().enumerate() {
+        if let Some(cur) = check.active.iter().position(|&x| x == orig) {
+            check.swap(pos, cur);
+        }
+    }
+    check
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minvp::gen::{generate, GenKind};
+    use minvp::jacobi::eigen_sym_sorted;
+
+    /// La revalidation doit porter sur le sous-ensemble demande, meme apres un
+    /// parcours qui a permute `z` (regression : `active` etait remis a `0..m`).
+    #[test]
+    fn head_subset_dataset_validates_the_right_subset() {
+        let mut dm = generate(GenKind::Blocks, 200, 25, 0.5, 0.1, 3, 1, 7);
+        dm.standardize(true);
+        let mut ds = Dataset::new(dm, Repr::Packed, usize::MAX, 8);
+        // permutation quelconque, comme le ferait un parcours
+        for (a, b) in [(0usize, 17usize), (4, 11), (2, 20), (1, 9)] {
+            ds.swap(a, b);
+        }
+        let set = vec![3usize, 5, 9, 14];
+        let check = head_subset_dataset(&ds, &set, usize::MAX, 8);
+
+        let mut head = check.active[..set.len()].to_vec();
+        head.sort_unstable();
+        assert_eq!(head, set, "le bloc de tete doit etre exactement le sous-ensemble");
+
+        let strict = AlgoConfig {
+            tol: 1e-13,
+            max_iters_cold: 4000,
+            max_iters_warm: 400,
+            ..Default::default()
+        };
+        let ev = greedy::initial_eigenpair_public(&check, set.len(), &strict);
+
+        // reference independante : sous-matrice dense de la correlation, Jacobi.
+        // `packed` est indexee par position physique, `set` par indice d'origine.
+        let d = set.len();
+        let packed = ds.packed.as_ref().expect("packed");
+        let pos_of = |orig: usize| ds.active.iter().position(|&x| x == orig).expect("present");
+        let mut a = vec![0.0f64; d * d];
+        for (x, &ix) in set.iter().enumerate() {
+            for (y, &iy) in set.iter().enumerate() {
+                a[x * d + y] = packed.get(pos_of(ix), pos_of(iy));
+            }
+        }
+        let (vals, _) = eigen_sym_sorted(&mut a, d);
+        assert!(
+            (ev.value - vals[0]).abs() < 1e-9,
+            "lambda_min verifie {} vs dense {}",
+            ev.value,
+            vals[0]
+        );
     }
 }

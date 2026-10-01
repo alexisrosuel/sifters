@@ -100,13 +100,43 @@ def test_forward_exact_matches_numpy_greedy():
 
 
 def test_prefilter_is_opt_in():
-    """`prefilter=True` est accepté, et évalue nettement moins de candidats que le
-    glouton exact (la qualité, elle, n'est pas garantie : c'est une heuristique)."""
+    """Le pré-filtre est une heuristique explicite, désactivée par défaut. Le mode
+    exact certifie chaque étape (test suivant) ; il n'en résulte pas forcément un
+    λ_min final supérieur, le glouton étant myope : une déviation heuristique peut
+    mieux finir."""
     X = _data(n=200, m=600, seed=1)
     exact = minvp.select(X, k=6, direction="forward", prefilter=False)
     filtre = minvp.select(X, k=6, direction="forward", prefilter=True)
     assert len(filtre.subset) == 6
-    assert filtre.total_exact_evals < exact.total_exact_evals
+    assert exact.certified_steps == len(exact.steps)
+
+
+def test_forward_exact_is_stepwise_optimal():
+    """Sélection avant certifiée : à chaque étape, l'ajout retenu maximise
+    réellement λ_min parmi *tous* les candidats restants (force brute numpy)."""
+    X = _data(n=300, m=40, rho=0.4, seed=3)
+    r = minvp.select(X, k=12, direction="forward", prefilter=False)
+    assert r.certified_steps == len(r.steps)
+
+    Z = X - X.mean(0)
+    Z = Z / np.linalg.norm(Z, axis=0)
+    R = Z.T @ Z
+    m = X.shape[1]
+    added = [st.index for st in r.steps]
+    first = (set(r.subset) - set(added)).pop()
+
+    live = list(range(m))
+    p0 = live.index(first)
+    live[0], live[p0] = live[p0], live[0]
+    for step, st in enumerate(r.steps):
+        k = step + 1
+        best = max(
+            np.linalg.eigvalsh(R[np.ix_(live[:k] + [live[j]], live[:k] + [live[j]])])[0]
+            for j in range(k, m)
+        )
+        assert abs(best - st.lambda_min) < 1e-8, (k, best, st.lambda_min)
+        pos = live.index(st.index)
+        live[k], live[pos] = live[pos], live[k]
 
 
 def test_eval_and_representation_agree():
