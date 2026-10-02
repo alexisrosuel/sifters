@@ -92,7 +92,14 @@ jobs:
 
       - name: Install wheel + test deps
         run: |
-          pip install --force-reinstall --no-deps dist/*.whl
+          # `--find-interpreter` builds one wheel per CPython available in the
+          # manylinux image, so `dist/` holds every version (cp39 ... cp315).
+          # Installing `dist/*.whl` would therefore fail on the first wheel whose
+          # ABI is not this job's: select the one matching the matrix entry.
+          tag="cp$(python -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
+          wheel=$(ls dist/*-"$tag"-*.whl)
+          echo "Installing $wheel"
+          pip install --force-reinstall --no-deps "$wheel"
           pip install numpy pytest
 
       - name: Import smoke test
