@@ -96,8 +96,11 @@ jobs:
           # manylinux image, so `dist/` holds every version (cp39 ... cp315).
           # Installing `dist/*.whl` would therefore fail on the first wheel whose
           # ABI is not this job's: select the one matching the matrix entry.
+          #
+          # The interpreter tag is repeated in the name (`cp314-cp314`), which
+          # also excludes the free-threaded `cp314-cp314t` build.
           tag="cp$(python -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
-          wheel=$(ls dist/*-"$tag"-*.whl)
+          wheel=$(ls dist/*-"$tag"-"$tag"-*.whl)
           echo "Installing $wheel"
           pip install --force-reinstall --no-deps "$wheel"
           pip install numpy pytest
