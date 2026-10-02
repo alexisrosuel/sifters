@@ -1,38 +1,38 @@
-//! Inverse de la matrice de corrélation, maintenue **incrémentalement**.
+//! Inverse of the correlation matrix, maintained **incrementally**.
 //!
-//! # Pourquoi
+//! # Why
 //!
-//! La plus petite valeur propre `lambda_min(A)` d'une matrice est la plus **grande**
-//! valeur propre de `A^{-1}`, égale à `1/lambda_min(A)`. Or l'inversion amplifie
-//! considérablement les écarts relatifs du bas du spectre : si
-//! `{0.0050, 0.0057, 0.0061, ...}` est un amas proche de 0, l'inverse donne
-//! `{200, 175, 164, ...}` dont les écarts relatifs (~12 %) sont exploitables par
-//! Lanczos en quelques itérations, là où il en fallait 60 à 200 sur la matrice
-//! d'origine. C'est l'effet « shift-invert » sans factorisation par candidat.
+//! The smallest eigenvalue `lambda_min(A)` of a matrix is the **largest**
+//! eigenvalue of `A^{-1}`, equal to `1/lambda_min(A)`. But inversion amplifies
+//! considerably the relative gaps of the bottom of the spectrum: if
+//! `{0.0050, 0.0057, 0.0061, ...}` is a cluster close to 0, the inverse gives
+//! `{200, 175, 164, ...}` whose relative gaps (~12 %) are exploitable by
+//! Lanczos in a few iterations, where 60 to 200 were needed on the original
+//! matrix. This is the "shift-invert" effect without per-candidate factorization.
 //!
-//! # Mise à jour
+//! # Update
 //!
-//! Soit `W = R^{-1}` et `A = R_{-i}` le bloc privé de l'indice `i`. En partitionnant
-//! `R = [[A, b],[b^T, R_ii]]`, l'identité d'inverse par blocs donne
+//! Let `W = R^{-1}` and `A = R_{-i}` be the block with index `i` removed. By partitioning
+//! `R = [[A, b],[b^T, R_ii]]`, the block inverse identity gives
 //!
 //! ```text
 //! W = [[ A^{-1} + (A^{-1}b)(A^{-1}b)^T/s ,  -A^{-1}b/s ],
-//!      [ -b^T A^{-1}/s                    ,  1/s       ]]   avec s = 1/W_ii
+//!      [ -b^T A^{-1}/s                    ,  1/s       ]]   with s = 1/W_ii
 //! ```
 //!
-//! d'où la mise à jour **rang 1** (`O(k^2)` par suppression) :
+//! hence the **rank 1** update (`O(k^2)` per deletion):
 //!
 //! ```text
 //! A^{-1} = W_{-i,-i} - (1/W_ii) w w^T ,     w = W_{.,i}|_{. != i}
 //! ```
 //!
-//! La même identité appliquée à l'opérateur donne le produit matrice-vecteur de
-//! `A^{-1}` **sans former A** : `y = W_{-i,-i} x - (w^T x) w / W_ii`.
+//! The same identity applied to the operator gives the matrix-vector product of
+//! `A^{-1}` **without forming A**: `y = W_{-i,-i} x - (w^T x) w / W_ii`.
 
 use crate::num::dot;
 use crate::packed::PackedSym;
 
-/// Inverse (dense, symétrique) du bloc de tête d'une matrice de corrélation.
+/// Inverse (dense, symmetric) of the leading block of a correlation matrix.
 #[derive(Clone, Debug)]
 pub struct InverseSym {
     m: usize,
@@ -40,17 +40,20 @@ pub struct InverseSym {
 }
 
 impl InverseSym {
-    /// Inverse du bloc de tête `m x m` de `p`, par factorisation de Cholesky.
+    /// Inverse of the leading `m x m` block of `p`, by Cholesky factorization.
     ///
-    /// Retourne `None` si le bloc n'est pas défini positif (corrélation singulière,
-    /// cas fréquent quand `M > N`).
+    /// Returns `None` if the block is not positive definite (singular correlation,
+    /// a frequent case when `M > N`).
     pub fn from_packed(p: &PackedSym, m: usize) -> Option<Self> {
         if m == 0 {
-            return Some(Self { m: 0, w: Vec::new() });
+            return Some(Self {
+                m: 0,
+                w: Vec::new(),
+            });
         }
         let scale = (0..m).map(|i| p.get(i, i).abs()).fold(1.0f64, f64::max);
         let eps = 1e-13 * scale;
-        // Cholesky R = L L^T (lignes-major, triangle inférieur)
+        // Cholesky R = L L^T (row-major, lower triangle)
         let mut l = vec![0.0f64; m * m];
         for i in 0..m {
             for j in 0..=i {
@@ -68,7 +71,7 @@ impl InverseSym {
                 }
             }
         }
-        // Inverse de L (triangulaire inférieure)
+        // Inverse of L (lower triangular)
         let mut li = vec![0.0f64; m * m];
         for i in 0..m {
             li[i * m + i] = 1.0 / l[i * m + i];
@@ -95,19 +98,19 @@ impl InverseSym {
         Some(Self { m, w })
     }
 
-    /// Dimension initiale (pas de stockage).
+    /// Initial dimension (no storage).
     pub fn dim(&self) -> usize {
         self.m
     }
 
-    /// Accès `(i, j)`.
+    /// Access `(i, j)`.
     #[inline]
     pub fn get(&self, i: usize, j: usize) -> f64 {
         self.w[i * self.m + j]
     }
 
-    /// Échange les indices `i` et `j` dans le bloc de tête `k` (même permutation que
-    /// `PackedSym::swap_leading`, appliquée à l'inverse).
+    /// Swaps indices `i` and `j` in the leading block `k` (same permutation as
+    /// `PackedSym::swap_leading`, applied to the inverse).
     pub fn swap_leading(&mut self, i: usize, j: usize, k: usize) {
         if i == j {
             return;
@@ -120,14 +123,14 @@ impl InverseSym {
             }
         }
         self.w.swap(i * self.m + i, j * self.m + j);
-        // Le stockage est plein et symetrique : on recopie l'entree `(i, j)` sur sa
-        // symetrique `(j, i)`.
+        // The storage is full and symmetric: the entry `(i, j)` is copied onto its
+        // symmetric counterpart `(j, i)`.
         self.w[j * self.m + i] = self.w[i * self.m + j];
     }
 
-    /// Supprime le dernier indice du bloc de tête `k` : le bloc devient `k-1`.
+    /// Removes the last index of the leading block `k`: the block becomes `k-1`.
     ///
-    /// `A^{-1} = W_{-i,-i} - (1/W_ii) w w^T` avec `i = k-1`.
+    /// `A^{-1} = W_{-i,-i} - (1/W_ii) w w^T` with `i = k-1`.
     pub fn downdate_last(&mut self, k: usize) {
         if k <= 1 {
             return;
@@ -151,15 +154,15 @@ impl InverseSym {
         }
     }
 
-    /// `y = W_{-del,-del} x - (w^T x) w / W_{del,del}` (longueur `k-1`), où
-    /// `W` est le bloc de tête `k x k`. Sans `del`, `y = W x`.
+    /// `y = W_{-del,-del} x - (w^T x) w / W_{del,del}` (length `k-1`), where
+    /// `W` is the leading `k x k` block. Without `del`, `y = W x`.
     ///
-    /// `y` reçoit l'**opposé** si `negate` est vrai (utile pour chercher la plus petite
-    /// valeur propre de `-A^{-1}`, c'est-à-dire la plus grande de `A^{-1}`).
+    /// `y` receives the **negation** if `negate` is true (useful to seek the smallest
+    /// eigenvalue of `-A^{-1}`, that is, the largest of `A^{-1}`).
     ///
-    /// La voie `del` évite toute branche dans la boucle `O(k^2)` : les produits
-    /// scalaires sont scindés en deux segments contigus de part et d'autre de
-    /// l'indice supprimé, ce qui les rend vectorisables.
+    /// The `del` path avoids any branch in the `O(k^2)` loop: the dot
+    /// products are split into two contiguous segments on either side of
+    /// the deleted index, which makes them vectorizable.
     pub fn mul(&self, k: usize, del: Option<usize>, x: &[f64], y: &mut [f64], negate: bool) {
         let m = self.m;
         debug_assert!(k <= m);
@@ -174,7 +177,7 @@ impl InverseSym {
             Some(d) => {
                 let xa = &x[..d];
                 let xb = &x[d..k - 1];
-                // y[0..k-1] = W_{-d,-d} x, deux segments contigus par ligne.
+                // y[0..k-1] = W_{-d,-d} x, two contiguous segments per row.
                 for t in 0..d {
                     let row = &self.w[t * m..t * m + k];
                     y[t] = dot(&row[..d], xa) + dot(&row[d + 1..k], xb);
@@ -183,7 +186,7 @@ impl InverseSym {
                     let row = &self.w[(t + 1) * m..(t + 1) * m + k];
                     y[t] = dot(&row[..d], xa) + dot(&row[d + 1..k], xb);
                 }
-                // correction rang 1 : (w^T x) w / W_dd
+                // rank 1 correction: (w^T x) w / W_dd
                 let wdd = self.w[d * m + d];
                 if wdd.abs() > 1e-300 {
                     let mut c = 0.0;
@@ -211,8 +214,8 @@ impl InverseSym {
     }
 }
 
-/// Opérateur `x -> -W_{-d,-d} x + (w^T x) w / W_dd` : l'opposé de l'inverse de la
-/// sous-matrice privée de `d`. Sa plus **petite** valeur propre vaut
+/// Operator `x -> -W_{-d,-d} x + (w^T x) w / W_dd`: the negation of the inverse of the
+/// submatrix with `d` removed. Its **smallest** eigenvalue is
 /// `-1/lambda_min(R_{-d})`.
 #[derive(Debug)]
 pub struct NegInvSubOp<'a> {
@@ -223,9 +226,13 @@ pub struct NegInvSubOp<'a> {
 }
 
 impl<'a> NegInvSubOp<'a> {
-    /// Opérateur sur le bloc `0..k` privé de `del` (ou entier si `del = None`).
+    /// Operator on the `0..k` block with `del` removed (or the whole block if `del = None`).
     pub fn new(inv: &'a InverseSym, k: usize, del: Option<usize>) -> Self {
-        let dim = if del.is_some() { k.saturating_sub(1) } else { k };
+        let dim = if del.is_some() {
+            k.saturating_sub(1)
+        } else {
+            k
+        };
         Self { inv, k, del, dim }
     }
 }
@@ -239,12 +246,12 @@ impl crate::op::SymOp for NegInvSubOp<'_> {
     }
 }
 
-/// Bornes de Gershgorin sur les valeurs propres de `W` (utilitaire de test).
+/// Gershgorin bounds on the eigenvalues of `W` (test utility).
 pub fn row_abs_sum(inv: &InverseSym, k: usize, i: usize) -> f64 {
     (0..k).map(|j| inv.get(i, j).abs()).sum::<f64>() - inv.get(i, i).abs()
 }
 
-/// `y += alpha * row_i(W)` (utilitaire).
+/// `y += alpha * row_i(W)` (utility).
 pub fn row_axpy(inv: &InverseSym, k: usize, i: usize, alpha: f64, y: &mut [f64]) {
     for j in 0..k {
         y[j] += alpha * inv.get(i, j);
@@ -291,8 +298,20 @@ mod tests {
         inv.swap_leading(i, j, m);
         for a in 0..m {
             for b in 0..m {
-                let pa = if a == i { j } else if a == j { i } else { a };
-                let pb = if b == i { j } else if b == j { i } else { b };
+                let pa = if a == i {
+                    j
+                } else if a == j {
+                    i
+                } else {
+                    a
+                };
+                let pb = if b == i {
+                    j
+                } else if b == j {
+                    i
+                } else {
+                    b
+                };
                 let expect = before[pa * m + pb];
                 assert!(
                     (inv.get(a, b) - expect).abs() < 1e-14,
@@ -322,11 +341,11 @@ mod tests {
                 assert!((s - expect).abs() < 1e-9, "({i},{j}) {s}");
             }
         }
-        // la formule : W' = W - col col^T / W_ii
+        // the formula: W' = W - col col^T / W_ii
         for a in 0..k {
             for b in 0..k {
-                let expect = before[a * m + b]
-                    - before[a * m + k] * before[k * m + b] / before[k * m + k];
+                let expect =
+                    before[a * m + b] - before[a * m + k] * before[k * m + b] / before[k * m + k];
                 assert!((inv.get(a, b) - expect).abs() < 1e-12, "({a},{b})");
             }
         }
@@ -347,7 +366,7 @@ mod tests {
                 perm.swap(d, k - 1);
                 inv.downdate_last(k);
                 k -= 1;
-                // erreur max de W R - I sur un echantillon
+                // max error of W R - I over a sample
                 for i in (0..k).step_by((k / 8).max(1)) {
                     for j in (0..k).step_by((k / 8).max(1)) {
                         let mut s = 0.0;
@@ -359,8 +378,8 @@ mod tests {
                     }
                 }
             }
-            eprintln!("m={m} steps={steps} -> erreur max W R - I = {worst:.3e} (k final {k})");
-            assert!(worst < 1e-6, "derive trop forte : {worst:.3e}");
+            eprintln!("m={m} steps={steps} -> max error W R - I = {worst:.3e} (k final {k})");
+            assert!(worst < 1e-6, "too large a drift: {worst:.3e}");
         }
     }
 
@@ -371,7 +390,7 @@ mod tests {
         let mut inv = InverseSym::from_packed(&p, m).expect("PD");
         let mut perm: Vec<usize> = (0..m).collect();
         let mut k = m;
-        // on retire les indices dans un ordre quelconque
+        // indices are removed in an arbitrary order
         let mut rng = crate::gen::Rng::new(3);
         while k > 2 {
             let d = (rng.next_u64() as usize) % k;
@@ -379,7 +398,7 @@ mod tests {
             perm.swap(d, k - 1);
             inv.downdate_last(k);
             k -= 1;
-            // vérifie W = (R_perm[0..k])^{-1}
+            // check W = (R_perm[0..k])^{-1}
             for i in 0..k {
                 for j in 0..k {
                     let mut s = 0.0;
@@ -403,7 +422,7 @@ mod tests {
         for d in 0..k {
             let mut y = vec![0.0; k - 1];
             inv.mul(k, Some(d), &x, &mut y, false);
-            // référence : inverse explicite du bloc privé de d
+            // reference: explicit inverse of the block with d removed
             let idx: Vec<usize> = (0..k).filter(|&j| j != d).collect();
             let d2 = idx.len();
             let mut sub = vec![0.0; d2 * d2];
@@ -412,7 +431,7 @@ mod tests {
                     sub[a * d2 + b] = p.get(idx[a], idx[b]);
                 }
             }
-            // x = A y  =>  y attendu = A^{-1} x : on résout par Cholesky
+            // x = A y  =>  expected y = A^{-1} x: solved by Cholesky
             let mut l = vec![0.0; d2 * d2];
             for i in 0..d2 {
                 for j in 0..=i {
@@ -448,7 +467,7 @@ mod tests {
 
     #[test]
     fn inverse_smallest_eigenvalue_matches_mul() {
-        // la plus grande valeur propre de A^{-1} = 1/lambda_min(A)
+        // the largest eigenvalue of A^{-1} = 1/lambda_min(A)
         let m = 16;
         let p = dataset(GenKind::Blocks, 300, m, 0.6, 13);
         let inv = InverseSym::from_packed(&p, m).expect("PD");
@@ -456,7 +475,7 @@ mod tests {
         let mut op = NegInvSubOp::new(&inv, k, None);
         let out = crate::lanczos::smallest_eigenpair(&mut op, None, 1e-13, 200);
         let lam_min = -1.0 / out.value;
-        // référence par Jacobi
+        // Jacobi reference
         let mut a = vec![0.0; k * k];
         for i in 0..k {
             for j in 0..k {

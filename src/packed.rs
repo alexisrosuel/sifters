@@ -1,31 +1,31 @@
-//! Matrice symetrique stockee en triangle inferieur "packed" (row-major).
+//! Symmetric matrix stored in the "packed" lower triangle (row-major).
 //!
-//! La ligne `i` contient `i+1` coefficients, a l'offset `i*(i+1)/2`.
-//! La diagonale vaut 1 (matrice de correlation) mais reste stockee pour simplifier
-//! les acces et permettre un usage generique.
+//! Row `i` contains `i+1` coefficients, at offset `i*(i+1)/2`.
+//! The diagonal equals 1 (correlation matrix) but is still stored to simplify
+//! the accesses and allow a generic use.
 //!
-//! Proprietes cles exploitees par le solveur :
-//!  * la sous-matrice active est **toujours le bloc de tete** `0..k` ;
-//!  * supprimer une variable = une permutation de lignes/colonnes `i <-> k-1`
-//!    restreinte au bloc de tete (cout `O(k)`, pas de recompaction `O(M^2)`).
+//! Key properties exploited by the solver:
+//!  * the active submatrix is **always the leading block** `0..k` ;
+//!  * removing a variable = a permutation of rows/columns `i <-> k-1`
+//!    restricted to the leading block (cost `O(k)`, no recompaction `O(M^2)`).
 
 use crate::matrix::DataMatrix;
 use crate::num::{axpy, dot};
 use rayon::prelude::*;
 
-/// Offset du debut de la ligne `i` dans le buffer packed.
+/// Offset of the start of row `i` in the packed buffer.
 #[inline]
 pub const fn row_offset(i: usize) -> usize {
     i * (i + 1) / 2
 }
 
-/// Nombre d'entrees du triangle inferieur d'une matrice `m x m`.
+/// Number of entries of the lower triangle of an `m x m` matrix.
 #[inline]
 pub const fn packed_len(m: usize) -> usize {
     m * (m + 1) / 2
 }
 
-/// Matrice symetrique `m x m` en triangle inferieur.
+/// Symmetric `m x m` matrix in the lower triangle.
 #[derive(Clone, Debug)]
 pub struct PackedSym {
     m: usize,
@@ -33,24 +33,27 @@ pub struct PackedSym {
 }
 
 impl PackedSym {
-    /// Matrice nulle de taille `m` (diagonale non initialisee a 1).
+    /// Zero matrix of size `m` (diagonal not initialized to 1).
     pub fn zeros(m: usize) -> Self {
-        Self { m, data: vec![0.0; packed_len(m)] }
+        Self {
+            m,
+            data: vec![0.0; packed_len(m)],
+        }
     }
 
-    /// Taille.
+    /// Size.
     #[inline]
     pub fn dim(&self) -> usize {
         self.m
     }
 
-    /// Acces au buffer brut.
+    /// Access to the raw buffer.
     #[inline]
     pub fn raw(&self) -> &[f64] {
         &self.data
     }
 
-    /// Acces `(i, j)` symetrique.
+    /// Symmetric access `(i, j)`.
     #[inline]
     pub fn get(&self, i: usize, j: usize) -> f64 {
         if i >= j {
@@ -60,12 +63,12 @@ impl PackedSym {
         }
     }
 
-    /// Construit la matrice de correlation `Z^T Z` depuis les colonnes deja
-    /// normalisees de `dm`, en parallele par blocs de lignes.
+    /// Builds the correlation matrix `Z^T Z` from the already
+    /// normalized columns of `dm`, in parallel by row blocks.
     ///
-    /// `block_rows` controle la taille du bloc de lignes traite par tache : un bloc
-    /// reste resident en cache pendant qu'on balaye les blocs de colonnes, ce qui
-    /// reduit le trafic memoire d'un facteur ~`M / block_rows`.
+    /// `block_rows` controls the size of the row block processed per task: a block
+    /// stays resident in cache while we sweep the column blocks, which
+    /// reduces the memory traffic by a factor ~`M / block_rows`.
     pub fn correlation(dm: &DataMatrix, block_rows: usize) -> Self {
         let m = dm.cols;
         let n = dm.rows;
@@ -74,10 +77,10 @@ impl PackedSym {
             return Self { m, data };
         }
         let br = block_rows.max(1).min(m);
-        let cb = 64usize.min(m.max(1)); // bloc de colonnes (cache-friendly)
+        let cb = 64usize.min(m.max(1)); // column block (cache-friendly)
         let nblocks = m.div_ceil(br);
 
-        // Decoupage du buffer packed en tranches disjointes, une par bloc de lignes.
+        // Splitting of the packed buffer into disjoint slices, one per row block.
         let mut chunks: Vec<(&mut [f64], usize, usize)> = Vec::with_capacity(nblocks);
         let mut rest: &mut [f64] = &mut data;
         for b in 0..nblocks {
@@ -91,7 +94,7 @@ impl PackedSym {
 
         chunks.into_par_iter().for_each(|(buf, r0, r1)| {
             let base = row_offset(r0);
-            // 1) blocs de colonnes entierement sous le bloc de lignes : `j < r0 <= i`.
+            // 1) column blocks entirely below the row block: `j < r0 <= i`.
             let mut j0 = 0usize;
             while j0 < r0 {
                 let j1 = (j0 + cb).min(r0);
@@ -104,7 +107,7 @@ impl PackedSym {
                 }
                 j0 = j1;
             }
-            // 2) region triangulaire du bloc diagonal.
+            // 2) triangular region of the diagonal block.
             for i in r0..r1 {
                 let zi = dm.col(i);
                 let row = &mut buf[row_offset(i) - base..row_offset(i) - base + i + 1];
@@ -118,10 +121,10 @@ impl PackedSym {
         Self { m, data }
     }
 
-    /// Produit matrice-vecteur sur le bloc de tete `k x k` : `y[0..k] = P[0..k,0..k] x[0..k]`.
+    /// Matrix-vector product on the leading block `k x k`: `y[0..k] = P[0..k,0..k] x[0..k]`.
     ///
-    /// Un seul balayage sequentiel du triangle packed (bon pour le prefetcher),
-    /// boucle interne vectorisable.
+    /// A single sequential sweep of the packed triangle (good for the prefetcher),
+    /// vectorizable inner loop.
     pub fn matvec_head(&self, k: usize, x: &[f64], y: &mut [f64]) {
         debug_assert!(k <= self.m && x.len() >= k && y.len() >= k);
         y[..k].fill(0.0);
@@ -129,7 +132,7 @@ impl PackedSym {
             let base = row_offset(i);
             let row = &self.data[base..base + i + 1];
             let xi = x[i];
-            // diagonale + triangle inferieur
+            // diagonal + lower triangle
             let mut s = row[i] * xi;
             for (j, &v) in row[..i].iter().enumerate() {
                 s += v * x[j];
@@ -139,45 +142,45 @@ impl PackedSym {
         }
     }
 
-    /// Permute les indices `i` et `j` (`i < j`) dans le bloc `0..k`, puis "oublie"
-    /// la ligne/colonne `j` en decroissant `k` chez l'appelant.
+    /// Permutes the indices `i` and `j` (`i < j`) in the block `0..k`, then "forgets"
+    /// the row/column `j` by decreasing `k` at the caller.
     ///
-    /// Aucune donnee n'est deplacee en dehors du bloc de tete : cout `O(k)`.
+    /// No data is moved outside the leading block: cost `O(k)`.
     pub fn swap_leading(&mut self, i: usize, j: usize) {
         if i == j {
             return;
         }
-        // L'echange est symetrique, mais l'algorithme ci-dessous suppose `i < j`.
+        // The swap is symmetric, but the algorithm below assumes `i < j`.
         if i > j {
             return self.swap_leading(j, i);
         }
         debug_assert!(i < j);
-        // diagonale
+        // diagonal
         let (oi, oj) = (row_offset(i), row_offset(j));
         self.data.swap(oi + i, oj + j);
-        // colonnes q < i : (i,q) <-> (j,q)
+        // columns q < i: (i,q) <-> (j,q)
         for q in 0..i {
             self.data.swap(oi + q, oj + q);
         }
-        // lignes p dans (i, j) : la paire (p,i) est stockee en (p,i) et la paire
-        // (p,j) en (j,p) [car p < j] : on echange ces deux emplacements.
+        // rows p in (i, j): the pair (p,i) is stored at (p,i) and the pair
+        // (p,j) at (j,p) [because p < j]: we swap these two locations.
         for p in (i + 1)..j {
             self.data.swap(row_offset(p) + i, row_offset(j) + p);
         }
-        // lignes p > j : les deux paires sont stockees dans la meme ligne.
+        // rows p > j: both pairs are stored in the same row.
         for p in (j + 1)..self.m {
             self.data.swap(row_offset(p) + i, row_offset(p) + j);
         }
     }
 
-    /// Ajoute un scalaire a la diagonale sur le bloc de tete (regularisation).
+    /// Adds a scalar to the diagonal on the leading block (regularization).
     pub fn add_to_diagonal_head(&mut self, k: usize, delta: f64) {
         for i in 0..k {
             self.data[row_offset(i) + i] += delta;
         }
     }
 
-    /// Produit scalaire d'une ligne (`i < k`) avec un vecteur de longueur `k`.
+    /// Dot product of a row (`i < k`) with a vector of length `k`.
     pub fn row_dot_head(&self, k: usize, i: usize, x: &[f64]) -> f64 {
         debug_assert!(i < k && k <= self.m);
         let base = row_offset(i);
@@ -190,20 +193,18 @@ impl PackedSym {
     }
 }
 
-/// Reconstruit une ligne complete (`k` coefficients) depuis la matrice packed.
+/// Reconstructs a complete row (`k` coefficients) from the packed matrix.
 pub fn row_into(p: &PackedSym, k: usize, i: usize, out: &mut [f64]) {
     debug_assert!(i < k && k <= p.m && out.len() >= k);
     let base = row_offset(i);
-    for j in 0..i {
-        out[j] = p.data[base + j];
-    }
+    out[..i].copy_from_slice(&p.data[base..base + i]);
     out[i] = p.data[base + i];
     for j in (i + 1)..k {
         out[j] = p.data[row_offset(j) + i];
     }
 }
 
-/// `y += alpha * row_i(0..k)` (utile pour les mises a jour incrementales).
+/// `y += alpha * row_i(0..k)` (useful for incremental updates).
 pub fn row_axpy(p: &PackedSym, k: usize, i: usize, alpha: f64, y: &mut [f64]) {
     debug_assert!(i < k && k <= p.m);
     let base = row_offset(i);
@@ -222,7 +223,11 @@ mod tests {
     fn naive_corr(dm: &DataMatrix) -> Vec<Vec<f64>> {
         let m = dm.cols;
         (0..m)
-            .map(|i| (0..m).map(|j| crate::num::dot(dm.col(i), dm.col(j))).collect())
+            .map(|i| {
+                (0..m)
+                    .map(|j| crate::num::dot(dm.col(i), dm.col(j)))
+                    .collect()
+            })
             .collect()
     }
 
@@ -251,7 +256,12 @@ mod tests {
         let naive = naive_corr(&dm);
         for i in 0..m {
             let expect: f64 = (0..m).map(|j| naive[i][j] * x[j]).sum();
-            assert!((y[i] - expect).abs() < 1e-11, "i={i} {} vs {}", y[i], expect);
+            assert!(
+                (y[i] - expect).abs() < 1e-11,
+                "i={i} {} vs {}",
+                y[i],
+                expect
+            );
         }
     }
 
@@ -261,7 +271,7 @@ mod tests {
         dm.standardize(true);
         let mut p = PackedSym::correlation(&dm, 8);
         let m = dm.cols;
-        // permutation appliquee manuellement a la matrice naive
+        // permutation applied manually to the naive matrix
         let mut perm: Vec<usize> = (0..m).collect();
         let mut k = m;
         let mut rng = crate::gen::Rng::new(5);
@@ -271,7 +281,7 @@ mod tests {
             p.swap_leading(i, j);
             perm.swap(i, j);
             k -= 1;
-            // verifie tout le bloc de tete
+            // checks the whole leading block
             for a in 0..k {
                 for b in 0..k {
                     let expect = crate::num::dot(dm.col(perm[a]), dm.col(perm[b]));
@@ -303,9 +313,9 @@ mod tests {
         }
     }
 
-    /// `swap_leading` est symetrique du point de vue de l'appelant : `(i, j)` et
-    /// `(j, i)` doivent donner le meme resultat (le stockage packed, lui, impose
-    /// un ordre interne).
+    /// `swap_leading` is symmetric from the caller's point of view: `(i, j)` and
+    /// `(j, i)` must give the same result (the packed storage, for its part, imposes
+    /// an internal order).
     #[test]
     fn swap_leading_accepts_reversed_arguments() {
         let mut dm = generate(GenKind::Blocks, 150, 15, 0.5, 0.1, 3, 1, 11);

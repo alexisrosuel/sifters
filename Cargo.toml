@@ -1,29 +1,25 @@
 [workspace]
-members = ["crates/minvp-python"]
-# `cargo build --release` a la racine ne construit que le binaire/la librairie
-# Rust ; l'extension Python se construit via `maturin develop` (ou
-# `cargo build -p minvp-python`).
+members = ["crates/sifters-python"]
+# `cargo build --release` at the root only builds the Rust library; the Python
+# extension is built with `maturin develop` (or `cargo build -p sifters-python`).
 default-members = ["."]
 
 [package]
-name = "minvp"
+name = "sifters"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-description = "E-optimal feature subset selection: greedy maximization of the smallest eigenvalue of a correlation matrix, multicore, 100% safe Rust."
+description = "Spectral feature selection in safe Rust: certified selection of the best-conditioned variable subset by maximizing the smallest eigenvalue of the correlation matrix."
 license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["feature-selection", "eigenvalues", "correlation", "statistics", "optimization"]
+categories = ["science", "mathematics"]
 
 [dependencies]
 rayon = "1.12"
 
-[dev-dependencies]
-
-[[bin]]
-name = "minvp"
-path = "src/main.rs"
-
 [lib]
-name = "minvp"
+name = "sifters"
 path = "src/lib.rs"
 
 [profile.release]

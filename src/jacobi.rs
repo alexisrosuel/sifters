@@ -1,12 +1,12 @@
-//! Petits solveurs spectraux denses utilises par Lanczos et par les tests :
-//! * `eigen_sym` : Jacobi cyclique (tres robuste, `O(n^3)`, `n` petit) ;
-//! * `tridiag_smallest` : plus petite valeur propre d'une matrice tridiagonale
-//!   symetrique par bissection + suite de Sturm (`O(iters * n)`), utilisee a chaque
-//!   iteration de Lanczos pour un test de convergence quasi gratuit.
+//! Small dense spectral solvers used by Lanczos and by the tests:
+//! * `eigen_sym`: cyclic Jacobi (very robust, `O(n^3)`, `n` small);
+//! * `tridiag_smallest`: smallest eigenvalue of a symmetric tridiagonal
+//!   matrix by bisection + Sturm sequence (`O(iters * n)`), used at each
+//!   Lanczos iteration for an almost free convergence test.
 
-/// Decomposition propre d'une matrice symetrique dense `n x n` stockee lignes-major.
+/// Eigendecomposition of a dense symmetric `n x n` matrix stored row-major.
 ///
-/// Retourne `(valeurs propres, vecteurs propres en colonnes)`; `a` est detruit.
+/// Returns `(eigenvalues, eigenvectors as columns)`; `a` is destroyed.
 pub fn eigen_sym(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     let mut v = vec![0.0; n * n];
     for i in 0..n {
@@ -58,9 +58,9 @@ pub fn eigen_sym(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
                     a[p * n + k] = c * apk - s * aqk;
                     a[q * n + k] = s * apk + c * aqk;
                 }
-                // V <- V J : apres k rotations, A_k = V^T A V avec V = J_1...J_k,
-                // donc A = V A_k V^T et les vecteurs propres de A sont les colonnes
-                // de V (mise a jour sur les colonnes p et q, comme A <- A J).
+                // V <- V J: after k rotations, A_k = V^T A V with V = J_1...J_k,
+                // so A = V A_k V^T and the eigenvectors of A are the columns
+                // of V (update on columns p and q, like A <- A J).
                 for k in 0..n {
                     let vkp = v[k * n + p];
                     let vkq = v[k * n + q];
@@ -74,13 +74,17 @@ pub fn eigen_sym(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     (vals, v)
 }
 
-/// Valeurs propres triees par ordre croissant, vecteurs associes (colonnes).
+/// Eigenvalues sorted in increasing order, associated vectors (columns).
 pub fn eigen_sym_sorted(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     let (vals, vecs) = eigen_sym(a, n);
     let mut idx: Vec<usize> = (0..n).collect();
-    idx.sort_by(|&i, &j| vals[i].partial_cmp(&vals[j]).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|&i, &j| {
+        vals[i]
+            .partial_cmp(&vals[j])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let sv: Vec<f64> = idx.iter().map(|&i| vals[i]).collect();
-    // Convention : `vecs[e * n + k]` = element `e` du vecteur propre `k` (colonnes).
+    // Convention: `vecs[e * n + k]` = element `e` of eigenvector `k` (columns).
     let mut svec = vec![0.0; n * n];
     for (newc, &oldc) in idx.iter().enumerate() {
         for e in 0..n {
@@ -90,8 +94,8 @@ pub fn eigen_sym_sorted(a: &mut [f64], n: usize) -> (Vec<f64>, Vec<f64>) {
     (sv, svec)
 }
 
-/// Nombre de valeurs propres de `T` (tridiagonale symetrique) strictement
-/// inferieures a `mu`, via la suite de Sturm (`O(n)`).
+/// Number of eigenvalues of `T` (symmetric tridiagonal) strictly
+/// less than `mu`, via the Sturm sequence (`O(n)`).
 pub fn sturm_count(alphas: &[f64], betas: &[f64], mu: f64) -> usize {
     let n = alphas.len();
     if n == 0 {
@@ -101,7 +105,7 @@ pub fn sturm_count(alphas: &[f64], betas: &[f64], mu: f64) -> usize {
     let mut cnt = if d < 0.0 { 1 } else { 0 };
     for i in 1..n {
         if d == 0.0 {
-            // perturbation infinitesimale : evite la division par zero
+            // infinitesimal perturbation: avoids division by zero
             d = f64::MIN_POSITIVE * (1.0 + alphas[i].abs());
         }
         d = (alphas[i] - mu) - betas[i - 1] * betas[i - 1] / d;
@@ -112,13 +116,13 @@ pub fn sturm_count(alphas: &[f64], betas: &[f64], mu: f64) -> usize {
     cnt
 }
 
-/// Vrai s'il existe **au moins une** valeur propre de `T` inferieure a `mu`
-/// (suite de Sturm, `O(n)` mais avec sortie anticipee).
+/// True if there exists **at least one** eigenvalue of `T` less than `mu`
+/// (Sturm sequence, `O(n)` but with early exit).
 ///
-/// Le compteur de Sturm est croissant : des qu'un pivot devient negatif, la
-/// reponse est acquise et l'on peut abandonner le reste de la recurrence. La
-/// bissection de [`tridiag_smallest`], appelee a chaque iteration de Lanczos, n'a
-/// besoin que de ce predicat.
+/// The Sturm counter is increasing: as soon as a pivot becomes negative, the
+/// answer is settled and the rest of the recurrence can be abandoned. The
+/// bisection of [`tridiag_smallest`], called at each Lanczos iteration, needs
+/// only this predicate.
 #[inline]
 pub fn sturm_has_negative(alphas: &[f64], betas: &[f64], mu: f64) -> bool {
     let n = alphas.len();
@@ -141,9 +145,9 @@ pub fn sturm_has_negative(alphas: &[f64], betas: &[f64], mu: f64) -> bool {
     false
 }
 
-/// Plus petite valeur propre d'une tridiagonale symetrique (bissection).
+/// Smallest eigenvalue of a symmetric tridiagonal (bisection).
 ///
-/// `alphas` : diagonale (`n`), `betas[j]` : couplage entre `j` et `j+1` (`n-1`).
+/// `alphas`: diagonal (`n`), `betas[j]`: coupling between `j` and `j+1` (`n-1`).
 pub fn tridiag_smallest(alphas: &[f64], betas: &[f64], iters: usize) -> f64 {
     let n = alphas.len();
     if n == 0 {
@@ -152,7 +156,7 @@ pub fn tridiag_smallest(alphas: &[f64], betas: &[f64], iters: usize) -> f64 {
     if n == 1 {
         return alphas[0];
     }
-    // Borne de Gershgorin sur la tridiagonale (bien plus fine que sur R).
+    // Gershgorin bound on the tridiagonal (much tighter than on R).
     let mut radius = 0.0f64;
     for i in 0..n {
         let mut r = alphas[i].abs();
@@ -179,7 +183,7 @@ pub fn tridiag_smallest(alphas: &[f64], betas: &[f64], iters: usize) -> f64 {
     hi
 }
 
-/// Reconstruit la matrice dense depuis une tridiagonale (pour Jacobi).
+/// Rebuilds the dense matrix from a tridiagonal (for Jacobi).
 pub fn tridiag_to_dense(alphas: &[f64], betas: &[f64]) -> Vec<f64> {
     let n = alphas.len();
     let mut t = vec![0.0; n * n];
@@ -193,13 +197,13 @@ pub fn tridiag_to_dense(alphas: &[f64], betas: &[f64]) -> Vec<f64> {
     t
 }
 
-/// Vecteur propre associe a la **plus petite** valeur propre d'une tridiagonale,
-/// par iteration inverse (`theta` doit etre une approximation de cette valeur,
-/// typiquement le resultat de [`tridiag_smallest`]).
+/// Eigenvector associated with the **smallest** eigenvalue of a tridiagonal,
+/// by inverse iteration (`theta` must be an approximation of that value,
+/// typically the result of [`tridiag_smallest`]).
 ///
-/// Cout `O(iters * n)` : remplace une diagonalisation de Jacobi `O(n^3)` dans la
-/// boucle chaude de Lanczos, ou `n` (nombre d'iterations) peut atteindre plusieurs
-/// centaines.
+/// Cost `O(iters * n)`: replaces a Jacobi diagonalization `O(n^3)` in the
+/// warm loop of Lanczos, where `n` (number of iterations) can reach several
+/// hundreds.
 pub fn tridiag_smallest_eigenvector(
     alphas: &[f64],
     betas: &[f64],
@@ -214,13 +218,13 @@ pub fn tridiag_smallest_eigenvector(
     tridiag_inverse_iterate(alphas, betas, theta, &start, iters)
 }
 
-/// `iters` iterations inverses sur `(T - theta I) z = y` en partant de `start`,
-/// avec factorisation LU (`O(n)`) faite une seule fois. Renvoie `z` normalise.
+/// `iters` inverse iterations on `(T - theta I) z = y` starting from `start`,
+/// with LU factorization (`O(n)`) done only once. Returns normalized `z`.
 ///
-/// Sert a entretenir le couple propre de la tridiagonale de Lanczos d'une
-/// iteration a l'autre : en partant du vecteur propre precedent etendu, deux ou
-/// trois iterations suffisent, contre ~50 balayages de Sturm pour une bissection
-/// complete.
+/// Used to maintain the eigenpair of the Lanczos tridiagonal from one
+/// iteration to the next: starting from the previous eigenvector extended, two or
+/// three iterations suffice, against ~50 Sturm sweeps for a complete
+/// bisection.
 pub fn tridiag_inverse_iterate(
     alphas: &[f64],
     betas: &[f64],
@@ -254,7 +258,7 @@ pub fn tridiag_inverse_iterate(
         if l[i - 1].abs() < 1e-300 {
             l[i - 1] = 1e-300;
         }
-        // La tridiagonale deborde de la longueur des betas fournis (`n-1`).
+        // The tridiagonal overflows the length of the provided betas (`n-1`).
         let b = betas[i - 1];
         l[i] = (alphas[i] - theta) - b * b / l[i - 1];
     }
@@ -286,7 +290,7 @@ mod tests {
 
     #[test]
     fn jacobi_matches_known_spectrum() {
-        // matrice 3x3 symetrique a spectre connu
+        // 3x3 symmetric matrix with a known spectrum
         let a0 = [2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0];
         let mut a = a0;
         let (v, _) = eigen_sym(&mut a, 3);
@@ -301,7 +305,10 @@ mod tests {
     #[test]
     fn sorted_eigenvectors_are_consistent() {
         let n = 5;
-        let a0 = [4.0, 1.0, 0.5, 0.2, 0.0, 1.0, 3.0, 1.0, 0.5, 0.2, 0.5, 1.0, 5.0, 1.0, 0.5, 0.2, 0.5, 1.0, 6.0, 1.0, 0.0, 0.2, 0.5, 1.0, 7.0];
+        let a0 = [
+            4.0, 1.0, 0.5, 0.2, 0.0, 1.0, 3.0, 1.0, 0.5, 0.2, 0.5, 1.0, 5.0, 1.0, 0.5, 0.2, 0.5,
+            1.0, 6.0, 1.0, 0.0, 0.2, 0.5, 1.0, 7.0,
+        ];
         let mut a = a0;
         let (vals, vecs) = eigen_sym_sorted(&mut a, n);
         for k in 0..n {
@@ -329,7 +336,7 @@ mod tests {
     fn sturm_count_is_correct() {
         let alphas = [1.0, 1.0, 1.0];
         let betas = [1.0, 1.0];
-        // spectre : 1-sqrt2, 1, 1+sqrt2
+        // spectrum: 1-sqrt2, 1, 1+sqrt2
         assert_eq!(sturm_count(&alphas, &betas, -10.0), 0);
         assert_eq!(sturm_count(&alphas, &betas, 0.0), 1);
         assert_eq!(sturm_count(&alphas, &betas, 0.5), 1);

@@ -1,28 +1,28 @@
-//! Matrice de donnees dense `N x M` (N observations, M variables), stockee en
-//! colonnes-major : chaque colonne (une variable) est contigue en memoire, ce qui
-//! est le bon layout pour tous les produits scalaires du solveur.
+//! Dense data matrix `N x M` (N observations, M variables), stored in
+//! column-major: each column (one variable) is contiguous in memory, which
+//! is the right layout for all the dot products of the solver.
 
 use rayon::prelude::*;
 
-/// Matrice de donnees `rows x cols` en colonnes-major.
+/// Data matrix `rows x cols` in column-major.
 #[derive(Clone, Debug)]
 pub struct DataMatrix {
-    /// Nombre d'observations (N).
+    /// Number of observations (N).
     pub rows: usize,
-    /// Nombre de variables (M).
+    /// Number of variables (M).
     pub cols: usize,
     /// `data[col * rows + row]`.
     pub data: Vec<f64>,
 }
 
 impl DataMatrix {
-    /// Construit une matrice depuis un buffer colonnes-major (aucune copie).
+    /// Builds a matrix from a column-major buffer (no copy).
     pub fn from_col_major(rows: usize, cols: usize, data: Vec<f64>) -> Self {
-        assert_eq!(data.len(), rows * cols, "taille de buffer incoherente");
+        assert_eq!(data.len(), rows * cols, "inconsistent buffer length");
         Self { rows, cols, data }
     }
 
-    /// Construit une matrice depuis un buffer lignes-major (transposition).
+    /// Builds a matrix from a row-major buffer (transpose).
     pub fn from_row_major(rows: usize, cols: usize, data: &[f64]) -> Self {
         assert_eq!(data.len(), rows * cols);
         let mut out = vec![0.0; rows * cols];
@@ -32,29 +32,33 @@ impl DataMatrix {
                 out[c * rows + r] = v;
             }
         }
-        Self { rows, cols, data: out }
+        Self {
+            rows,
+            cols,
+            data: out,
+        }
     }
 
-    /// Vue sur la colonne `j`.
+    /// View of column `j`.
     #[inline]
     pub fn col(&self, j: usize) -> &[f64] {
         let o = j * self.rows;
         &self.data[o..o + self.rows]
     }
 
-    /// Vue mutable sur la colonne `j`.
+    /// Mutable view of column `j`.
     #[inline]
     pub fn col_mut(&mut self, j: usize) -> &mut [f64] {
         let o = j * self.rows;
         &mut self.data[o..o + self.rows]
     }
 
-    /// Toutes les colonnes, decoupees en tranches contigues.
+    /// All the columns, split into contiguous slices.
     pub fn par_cols_mut(&mut self) -> impl IndexedParallelIterator<Item = &mut [f64]> {
         self.data.par_chunks_mut(self.rows)
     }
 
-    /// Sommes et normes des colonnes (parallele).
+    /// Sums and norms of the columns (parallel).
     pub fn column_stats(&self) -> (Vec<f64>, Vec<f64>) {
         let rows = self.rows;
         let mut means = vec![0.0; self.cols];
@@ -72,17 +76,17 @@ impl DataMatrix {
         (means, sumsq)
     }
 
-    /// Centre (si `center`) puis normalise chaque colonne a la norme 1.
+    /// Centers (if `center`) then normalizes each column to norm 1.
     ///
-    /// Apres cet appel la matrice est `Z` telle que `R = Z^T Z` soit la matrice de
-    /// correlation (si `center = true`) ou la matrice des cosinus (sinon).
+    /// After this call the matrix is `Z` such that `R = Z^T Z` is the matrix of
+    /// correlation (if `center = true`) or the matrix of cosines (otherwise).
     ///
-    /// Retourne le masque des colonnes conservees (les colonnes de variance nulle
-    /// sont eliminees, `false`), ainsi que la liste des indices d'origine elimines.
+    /// Returns the mask of the retained columns (the columns of zero variance
+    /// are eliminated, `false`), as well as the list of the eliminated original indices.
     pub fn standardize(&mut self, center: bool) -> StandardizeReport {
         let rows_f = self.rows as f64;
         let cols = self.cols;
-        // 1) moyennes puis normes centrees, en parallele.
+        // 1) means then centered norms, in parallel.
         let mut norms = vec![0.0f64; cols];
         self.data
             .par_chunks_mut(self.rows)
@@ -105,7 +109,7 @@ impl DataMatrix {
                 }
                 *nrm = n;
             });
-        // 2) elimination des colonnes degenerees (recompaction des colonnes gardees).
+        // 2) elimination of the degenerate columns (recompaction of the kept columns).
         let threshold = (self.rows as f64).sqrt() * f64::EPSILON * 100.0;
         let mut dropped = Vec::new();
         for (j, &n) in norms.iter().enumerate() {
@@ -131,10 +135,10 @@ impl DataMatrix {
     }
 }
 
-/// Resultat de la standardisation.
+/// Result of the standardization.
 #[derive(Clone, Debug)]
 pub struct StandardizeReport {
-    /// Indices (dans la numerotation d'origine) des colonnes supprimees.
+    /// Indices (in the original numbering) of the removed columns.
     pub dropped: Vec<usize>,
 }
 

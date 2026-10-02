@@ -1,0 +1,53 @@
+[workspace]
+authors = ["alexisrosuel <rosuelalexis1@gmail.com>"]
+channels = ["conda-forge"]
+name = "sifters"
+platforms = ["osx-arm64", "linux-64"]
+version = "0.1.0"
+
+[tasks]
+# Build the Rust extension into the pixi env (dev install)
+build = "maturin develop --release"
+# Build in debug mode (faster iteration)
+build-debug = "maturin develop"
+# Run the full Rust test suite
+test = "cargo test"
+# Run the Python API tests (run `pixi run build` first)
+test-py = "pytest tests"
+# Run clippy lints (Rust, whole workspace)
+lint = "cargo clippy --workspace --all-targets -- -D warnings"
+# Lint Python code (scripts, bench and tests)
+lint-py = "ruff check ."
+# Format Rust code
+fmt = "cargo fmt"
+# Check formatting
+fmt-check = "cargo fmt --check"
+# Type-check Python code
+type-py = "mypy scripts tests"
+# Scenario benchmarks (see bench/README.md)
+bench = "python bench/run.py --all"
+# Exact-mode benchmark (proof time, certified gap)
+bench-exact = "python bench/exact.py"
+# Rust-vs-numpy timing figure
+bench-numpy = "python scripts/bench_numpy.py"
+# Regenerate the README figures
+figures = "python scripts/make_figures.py"
+figures-recovery = "python scripts/make_recovery_figures.py"
+# Quality / time comparison against the naive baselines
+compare = "python scripts/compare_baseline.py"
+# Ground-truth recovery demo
+recovery = "python scripts/independence_recovery.py"
+
+[dependencies]
+python = "3.14.*"
+numpy = ">=2"
+pip = ">=26.1.2,<27"
+matplotlib = ">=3.11.1,<4"
+# Build tool for the PyO3 extension — must be declared so the env is reproducible
+maturin = ">=1.7,<2"
+
+[pypi-dependencies]
+# Python dev tooling (linting, testing, type checking)
+pytest = ">=7"
+ruff = ">=0.6"
+mypy = ">=1.11"

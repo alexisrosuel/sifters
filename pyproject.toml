@@ -3,14 +3,24 @@ requires = ["maturin>=1.7,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "minvp"
-version = "0.2.0"
-description = "Sélection E-optimale de variables : maximise la plus petite valeur propre de la matrice de corrélation."
+name = "sifters"
+version = "0.1.0"
+description = "Spectral feature selection in Rust: certified maximization of the smallest eigenvalue of the correlation matrix, to cut multicollinearity before regression or ML."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT OR Apache-2.0" }
 authors = [{ name = "Alexis Rosuel" }]
-keywords = ["statistics", "feature-selection", "eigenvalues", "correlation", "rust"]
+keywords = [
+    "feature-selection",
+    "multicollinearity",
+    "spectral-methods",
+    "condition-number",
+    "column-subset-selection",
+    "unsupervised",
+    "machine-learning",
+    "eigenvalues",
+    "rust",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -18,27 +28,50 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Mathematics",
 ]
-# numpy n'est pas requis : il n'est utilisé (s'il est présent) que pour convertir
-# listes/DataFrames en un tampon `float64` contigu.
+# numpy is not required: when present it is only used to convert lists and
+# DataFrames into a contiguous `float64` buffer.
 dependencies = []
 
 [project.optional-dependencies]
 numpy = ["numpy>=1.22"]
 test = ["pytest>=7", "numpy>=1.22"]
+# Everything the scripts/ generators and the dev tasks need.
+dev = ["pytest>=7", "numpy>=1.22", "matplotlib>=3.7", "ruff>=0.6", "mypy>=1.11"]
 
 [project.urls]
-Homepage = "https://github.com/alexisrosuel/min_vp"
+Homepage = "https://github.com/alexisrosuel/sifters"
+Repository = "https://github.com/alexisrosuel/sifters"
 
 [tool.maturin]
-# Extension native : `crates/minvp-python` -> module `minvp._minvp`.
-manifest-path = "crates/minvp-python/Cargo.toml"
-module-name = "minvp._minvp"
+# Native extension: `crates/sifters-python` -> module `sifters._sifters`.
+manifest-path = "crates/sifters-python/Cargo.toml"
+module-name = "sifters._sifters"
 python-source = "python"
-# les caches locaux ne doivent pas partir dans la roue
+# local caches must not end up in the wheel
 exclude = ["**/__pycache__/**", "**/*.pyc"]
-# Le crate declare déjà la feature `pyo3/extension-module`.
+# The crate already declares the `pyo3/extension-module` feature.
 strip = true
 
 [tool.pytest.ini_options]
-testpaths = ["python"]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
+# `tests/` import the shared generators from `scripts/` (e.g. independence_recovery)
+pythonpath = ["scripts"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# Explicit selection: `ruff check` without one follows the installed ruff's
+# default rule set, which drifts between versions.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# The measurement scripts are one-off tools: discarding a return value (F841)
+# is intentional there.
+"scripts/*" = ["F841"]
+"bench/*" = ["F841"]
+
+[tool.mypy]
+ignore_missing_imports = true

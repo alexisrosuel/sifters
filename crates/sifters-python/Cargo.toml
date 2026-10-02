@@ -1,0 +1,21 @@
+[package]
+name = "sifters-python"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Native Python binding (PyO3) for sifters: spectral feature selection in Rust."
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+# The extension module name: `import sifters._sifters`.
+name = "_sifters"
+crate-type = ["cdylib"]
+
+[dependencies]
+sifters = { path = "../..", version = "0.1.0" }
+pyo3 = { version = "0.29", features = ["extension-module"] }
+rayon = "1.12"
+
+[build-dependencies]
+pyo3-build-config = "0.29"

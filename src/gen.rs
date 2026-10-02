@@ -1,14 +1,14 @@
-//! Generateurs de donnees synthetiques reproductibles (et RNG minimal sans dependance).
+//! Reproducible synthetic data generators (and a minimal dependency-free RNG).
 
 use crate::matrix::DataMatrix;
 use std::f64::consts::PI;
 
-/// xorshift64* : rapide, deterministe, suffisant pour la generation de bruit.
+/// xorshift64*: fast, deterministic, sufficient for noise generation.
 #[derive(Clone, Debug)]
 pub struct Rng(u64);
 
 impl Rng {
-    /// Cree un RNG a partir d'une graine (l'etat nul est corrige).
+    /// Creates an RNG from a seed (the null state is corrected).
     pub fn new(seed: u64) -> Self {
         Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
     }
@@ -23,13 +23,13 @@ impl Rng {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D)
     }
 
-    /// Uniforme sur [0, 1).
+    /// Uniform on [0, 1).
     #[inline]
     pub fn uniform(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
     }
 
-    /// Loi normale centree reduite (Box-Muller).
+    /// Standard normal distribution (Box-Muller).
     #[inline]
     pub fn normal(&mut self) -> f64 {
         let u1 = self.uniform().max(1e-300);
@@ -38,25 +38,34 @@ impl Rng {
     }
 }
 
-/// Familles de matrices synthetiques.
+/// Families of synthetic matrices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GenKind {
-    /// Colonnes i.i.d. gaussiennes (correlation ~ 0).
+    /// i.i.d. Gaussian columns (correlation ~ 0).
     Iid,
-    /// Correlation equi-repliquee : `r_ij = rho` hors diagonale.
+    /// Equi-correlated: `r_ij = rho` off the diagonal.
     Equi,
-    /// Auto-regressif d'ordre 1 : `r_ij = rho^|i-j|` (Toeplitz).
+    /// First-order autoregressive: `r_ij = rho^|i-j|` (Toeplitz).
     Ar,
-    /// Structure par blocs : `rho_in` dans le bloc, `rho_out` entre blocs.
+    /// Block structure: `rho_in` within the block, `rho_out` between blocks.
     Blocks,
-    /// Modele a facteurs : `rank` facteurs latents + bruit.
+    /// Factor model: `rank` latent factors + noise.
     Factor,
 }
 
-/// Genere une matrice `n x m` (observations x variables) selon `kind`.
-pub fn generate(kind: GenKind, n: usize, m: usize, rho: f64, rho_out: f64, blocks: usize, rank: usize, seed: u64) -> DataMatrix {
+/// Generates a matrix `n x m` (observations x variables) according to `kind`.
+pub fn generate(
+    kind: GenKind,
+    n: usize,
+    m: usize,
+    rho: f64,
+    rho_out: f64,
+    blocks: usize,
+    rank: usize,
+    seed: u64,
+) -> DataMatrix {
     let mut rng = Rng::new(seed);
-    let mut data = vec![0.0; n * m]; // colonnes-major
+    let mut data = vec![0.0; n * m]; // column-major
     match kind {
         GenKind::Iid => {
             for v in data.iter_mut() {
@@ -75,7 +84,7 @@ pub fn generate(kind: GenKind, n: usize, m: usize, rho: f64, rho_out: f64, block
             }
         }
         GenKind::Ar => {
-            // Filtre AR(1) applique le long de l'axe des VARIABLES :
+            // AR(1) filter applied along the VARIABLES axis:
             // x_j = rho x_{j-1} + sqrt(1-rho^2) e_j  =>  corr(x_i, x_j) = rho^|i-j|.
             let s = (1.0 - rho * rho).max(0.0).sqrt();
             for i in 0..n {

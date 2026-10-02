@@ -1,57 +1,57 @@
-//! Operateurs lineaires symetriques et representations de la matrice de correlation.
+//! Symmetric linear operators and representations of the correlation matrix.
 //!
-//! Deux representations sont disponibles, choisies automatiquement :
+//! Two representations are available, chosen automatically:
 //!
-//! * `Packed`  : la matrice de correlation est materialisee en triangle inferieur.
-//!   Cout d'un produit matrice-vecteur `O(k^2)`, construction `O(N M^2)`.
-//! * `Implicit`: on garde `Z` (`N x M`, colonnes normees) et on applique
-//!   `R x = Z_S^T (Z_S x)`. Cout d'un matvec `O(N k)`, aucune materialisation.
-//!   Optimal des que `2N < k`.
+//! * `Packed`  : the correlation matrix is materialized in the lower triangle.
+//!   Cost of a matrix-vector product `O(k^2)`, construction `O(N M^2)`.
+//! * `Implicit`: we keep `Z` (`N x M`, normalized columns) and apply
+//!   `R x = Z_S^T (Z_S x)`. Cost of a matvec `O(N k)`, no materialization.
+//!   Optimal as soon as `2N < k`.
 
 use crate::matrix::DataMatrix;
 use crate::num::{axpy, dot};
 use crate::packed::PackedSym;
 use rayon::prelude::*;
 
-/// Operateur symetrique de dimension `n` (matvec `y = A x`).
+/// Symmetric operator of dimension `n` (matvec `y = A x`).
 ///
-/// `&mut self` permet a chaque operateur d'embarquer ses buffers de travail sans
-/// allocation dans la boucle chaude ; cela rend aussi l'objet `Send` pour rayon.
+/// `&mut self` lets each operator embed its working buffers without
+/// allocation in the hot loop; this also makes the object `Send` for rayon.
 pub trait SymOp {
-    /// Dimension de l'operateur.
+    /// Dimension of the operator.
     fn n(&self) -> usize;
     /// `y <- A x`.
     fn mul(&mut self, x: &[f64], y: &mut [f64]);
 }
 
-/// Representation de la matrice de correlation du jeu de donnees.
+/// Representation of the correlation matrix of the dataset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Repr {
-    /// Detecte automatiquement (packed si le budget memoire le permet).
+    /// Detected automatically (packed if the memory budget allows it).
     Auto,
-    /// Triangle inferieur materialise.
+    /// Materialized lower triangle.
     Packed,
-    /// Implicite via `Z`.
+    /// Implicit via `Z`.
     Implicit,
 }
 
-/// Jeu de donnees + ordre physique courant des colonnes.
+/// Dataset + current physical order of the columns.
 ///
-/// L'ordre physique est celui du bloc de tete : les `k` premieres positions sont
-/// les variables actives. `active[pos]` donne l'indice d'origine.
+/// The physical order is that of the leading block: the first `k` positions are
+/// the active variables. `active[pos]` gives the original index.
 #[derive(Debug)]
 pub struct Dataset {
-    /// Colonnes normees, `N x M`, colonnes-major.
+    /// Normalized columns, `N x M`, column-major.
     pub z: DataMatrix,
-    /// Triangle inferieur de `Z^T Z` (optionnel).
+    /// Lower triangle of `Z^T Z` (optional).
     pub packed: Option<PackedSym>,
-    /// Position physique -> indice de colonne d'origine.
+    /// Physical position -> original column index.
     pub active: Vec<usize>,
 }
 
 impl Dataset {
-    /// Construit le jeu de donnees, en materialisant la correlation si demande /
-    /// si le budget memoire le permet.
+    /// Builds the dataset, materializing the correlation if requested /
+    /// if the memory budget allows it.
     pub fn new(z: DataMatrix, want: Repr, mem_budget_bytes: usize, block_rows: usize) -> Self {
         let m = z.cols;
         let need = crate::packed::packed_len(m) * std::mem::size_of::<f64>();
@@ -60,25 +60,29 @@ impl Dataset {
             Repr::Implicit => false,
             Repr::Auto => need <= mem_budget_bytes,
         };
-        let packed = if materialize { Some(PackedSym::correlation(&z, block_rows)) } else { None };
+        let packed = if materialize {
+            Some(PackedSym::correlation(&z, block_rows))
+        } else {
+            None
+        };
         let active = (0..m).collect();
         Self { z, packed, active }
     }
 
-    /// Nombre de variables courantes.
+    /// Number of current variables.
     #[inline]
     pub fn m(&self) -> usize {
         self.z.cols
     }
 
-    /// Echange les positions physiques `i` et `j` dans toutes les representations.
+    /// Swaps the physical positions `i` and `j` in all representations.
     pub fn swap(&mut self, i: usize, j: usize) {
         if i == j {
             return;
         }
         self.active.swap(i, j);
-        // `PackedSym::swap_leading` exige `i < j` : on normalise l'ordre (l'echange
-        // est symetrique, mais le stockage packed ne l'est pas).
+        // `PackedSym::swap_leading` requires `i < j`: we normalize the order (the swap
+        // is symmetric, but the packed storage is not).
         let (a, b) = if i < j { (i, j) } else { (j, i) };
         if let Some(p) = self.packed.as_mut() {
             p.swap_leading(a, b);
@@ -90,20 +94,20 @@ impl Dataset {
         ca.swap_with_slice(cb);
     }
 
-    /// Indice de colonne d'origine de la position `pos`.
+    /// Original column index of position `pos`.
     #[inline]
     pub fn orig(&self, pos: usize) -> usize {
         self.active[pos]
     }
 
-    /// Vrai si la correlation est materialisee.
+    /// True if the correlation is materialized.
     pub fn is_packed(&self) -> bool {
         self.packed.is_some()
     }
 }
 
-/// Vue "sous-matrice principale" : bloc de tete `0..k`, eventuellement prive de
-/// l'indice `del` (suppression d'une variable candidate).
+/// "Leading submatrix" view: leading block `0..k`, possibly without
+/// the index `del` (removal of a candidate variable).
 #[derive(Debug)]
 pub struct SubOp<'a> {
     packed: Option<&'a PackedSym>,
@@ -117,12 +121,12 @@ pub struct SubOp<'a> {
 }
 
 impl<'a> SubOp<'a> {
-    /// Operateur sur le bloc `0..k` (sans suppression).
+    /// Operator on the block `0..k` (without removal).
     pub fn head(ds: &'a Dataset, k: usize) -> Self {
         Self::make(ds, k, None)
     }
 
-    /// Operateur sur le bloc `0..k` prive de l'indice `del`.
+    /// Operator on the block `0..k` without the index `del`.
     pub fn deleted(ds: &'a Dataset, k: usize, del: usize) -> Self {
         Self::make(ds, k, Some(del))
     }
@@ -144,7 +148,7 @@ impl<'a> SubOp<'a> {
         }
     }
 
-    /// Applique la sous-matrice au vecteur `x` de dimension `dim`.
+    /// Applies the submatrix to the vector `x` of dimension `dim`.
     fn apply(&mut self, x: &[f64]) {
         let k = self.k;
         match self.del {
@@ -190,7 +194,7 @@ impl SymOp for SubOp<'_> {
     }
 }
 
-/// `out[0..rows] <- Z_{0..k} x` (chargements de la sous-matrice courante).
+/// `out[0..rows] <- Z_{0..k} x` (loadings of the current submatrix).
 pub fn z_loading(z: &DataMatrix, k: usize, x: &[f64], out: &mut [f64]) {
     let rows = z.rows;
     out[..rows].fill(0.0);
@@ -202,7 +206,7 @@ pub fn z_loading(z: &DataMatrix, k: usize, x: &[f64], out: &mut [f64]) {
     }
 }
 
-/// `out[j] <- z_j . w` pour toutes les colonnes, en parallele (O(N M)).
+/// `out[j] <- z_j . w` for all columns, in parallel (O(N M)).
 pub fn z_dot_all(z: &DataMatrix, w: &[f64], out: &mut [f64]) {
     let rows = z.rows;
     out.par_iter_mut()
@@ -249,18 +253,24 @@ mod tests {
                 let mut expect = 0.0;
                 for b in 0..k - 1 {
                     let ib = if b < del { b } else { b + 1 };
-                    expect += dm.col(ia).iter().zip(dm.col(ib)).map(|(p, q)| p * q).sum::<f64>() * x[b];
+                    expect += dm
+                        .col(ia)
+                        .iter()
+                        .zip(dm.col(ib))
+                        .map(|(p, q)| p * q)
+                        .sum::<f64>()
+                        * x[b];
                 }
                 assert!((y[a] - expect).abs() < 1e-11, "del={del} a={a}");
             }
         }
     }
 
-    /// Regression : `Dataset::swap(i, j)` doit etre valide quel que soit l'ordre
-    /// des arguments. Le stockage packed n'est pas symetrique en `(i, j)`, donc
-    /// passer `i > j` a `PackedSym::swap_leading` corrompt la matrice — ce que
-    /// fait tout appel qui amene une variable situee *avant* la position cible
-    /// (verification du sous-ensemble retenu, echanges locaux arbitraires...).
+    /// Regression: `Dataset::swap(i, j)` must be valid whatever the order
+    /// of the arguments. The packed storage is not symmetric in `(i, j)`, so
+    /// passing `i > j` to `PackedSym::swap_leading` corrupts the matrix - which
+    /// every call that brings a variable located *before* the target position
+    /// does (checking the retained subset, arbitrary local swaps...).
     #[test]
     fn dataset_swap_is_order_insensitive() {
         let mut dm = generate(GenKind::Blocks, 120, 17, 0.5, 0.1, 3, 1, 21);
@@ -272,15 +282,15 @@ mod tests {
         for t in 0..60 {
             let i = (rng.next_u64() as usize) % m;
             let j = (rng.next_u64() as usize) % m;
-            // on alterne volontairement les deux ordres d'appel
+            // the two call orders are deliberately alternated
             if t % 2 == 0 {
                 ds.swap(i, j);
             } else {
                 ds.swap(j, i);
             }
             perm.swap(i, j);
-            assert_eq!(ds.active, perm, "permutation des indices d'origine");
-            let p = ds.packed.as_ref().expect("representation packed");
+            assert_eq!(ds.active, perm, "permutation of the original indices");
+            let p = ds.packed.as_ref().expect("packed representation");
             for a in 0..m {
                 for b in 0..m {
                     let expect = crate::num::dot(dm.col(perm[a]), dm.col(perm[b]));
@@ -291,7 +301,7 @@ mod tests {
                     );
                 }
             }
-            // les colonnes de `z` suivent la meme permutation
+            // the columns of `z` follow the same permutation
             for a in 0..m {
                 for r in 0..dm.rows {
                     assert!((ds.z.col(a)[r] - dm.col(perm[a])[r]).abs() < 1e-15);
@@ -301,12 +311,12 @@ mod tests {
     }
 }
 
-/// Operateur de la matrice bordee `[[R_S, c],[c^T, 1]]` ou `S` est le bloc de tete
-/// `0..k` et `c` la colonne `j` de la correlation (`j >= k`).
+/// Operator of the bordered matrix `[[R_S, c],[c^T, 1]]` where `S` is the leading block
+/// `0..k` and `c` the column `j` of the correlation (`j >= k`).
 ///
-/// Quand `R` est materialisee, le matvec coute `O(k^2)` (donnees residentes en
-/// cache) au lieu de `O(N k)` pour [`GatheredZOp`] : c'est la representation a
-/// privilegier pour la selection avant des que `k` n'est plus petit devant `2N`.
+/// When `R` is materialized, the matvec costs `O(k^2)` (data resident in
+/// cache) instead of `O(N k)` for [`GatheredZOp`]: this is the representation to
+/// prefer for forward selection as soon as `k` is no longer small compared to `2N`.
 #[derive(Debug)]
 pub struct BorderedHeadOp<'a> {
     packed: &'a PackedSym,
@@ -315,10 +325,10 @@ pub struct BorderedHeadOp<'a> {
 }
 
 impl<'a> BorderedHeadOp<'a> {
-    /// Construit l'operateur pour `S = 0..k` et le candidat `j`.
+    /// Builds the operator for `S = 0..k` and the candidate `j`.
     pub fn new(packed: &'a PackedSym, k: usize, j: usize) -> Self {
         debug_assert!(j >= k && j < packed.dim());
-        // `j >= k` : la colonne est stockee de facon contigue dans la ligne `j`.
+        // `j >= k`: the column is stored contiguously in row `j`.
         let base = crate::packed::row_offset(j);
         let col = packed.raw()[base..base + k].to_vec();
         Self { packed, k, col }
@@ -341,9 +351,9 @@ impl SymOp for BorderedHeadOp<'_> {
     }
 }
 
-/// Operateur "colonne selectionnees" : sous-matrice de Gram `C^T C` ou `C` est une
-/// liste arbitraire de colonnes de `Z`. Sert a la selection avant (ajout d'une
-/// variable candidate) et aux echanges locaux, sans modifier l'ordre physique.
+/// "Selected columns" operator: Gram submatrix `C^T C` where `C` is an
+/// arbitrary list of columns of `Z`. Used for forward selection (addition of a
+/// candidate variable) and for local swaps, without modifying the physical order.
 #[derive(Debug)]
 pub struct GatheredZOp<'a> {
     cols: Vec<&'a [f64]>,
@@ -352,13 +362,17 @@ pub struct GatheredZOp<'a> {
 }
 
 impl<'a> GatheredZOp<'a> {
-    /// Construit l'operateur depuis une liste de colonnes (references).
+    /// Builds the operator from a list of columns (references).
     pub fn new(cols: Vec<&'a [f64]>, rows: usize) -> Self {
-        Self { cols, rows, tmp: vec![0.0; rows] }
+        Self {
+            cols,
+            rows,
+            tmp: vec![0.0; rows],
+        }
     }
 
-    /// Construit l'operateur pour `S = {0..k}\{del}` eventuellement augmente de
-    /// `extra` (position physique hors du bloc de tete).
+    /// Builds the operator for `S = {0..k}\{del}` possibly augmented by
+    /// `extra` (physical position outside the leading block).
     pub fn build(z: &'a DataMatrix, k: usize, del: Option<usize>, extra: Option<usize>) -> Self {
         let mut cols: Vec<&'a [f64]> = Vec::with_capacity(k + 1);
         for c in 0..k {

@@ -1,380 +1,676 @@
-# minvp — sélection E-optimale de variables, en Rust
+# sifters - spectral feature selection, in Rust
 
-**`minvp` choisit, pour chaque taille K, le sous-ensemble de K variables dont la matrice
-de corrélation est la mieux conditionnée** — c'est-à-dire celui qui maximise sa plus
-petite valeur propre `λ_min(R_S)` (critère *E-optimal*, équivalent à `σ_min(Z_S)²`).
+[![CI](https://github.com/alexisrosuel/sifters/actions/workflows/ci.yml/badge.svg)](https://github.com/alexisrosuel/sifters/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/alexisrosuel/sifters#license)
 
-Problème NP-difficile → familles **imbriquées** construites par glouton, mais un glouton
-qui se paie le luxe d'être **exact et certifié** :
+**`sifters` picks the best-conditioned subset of variables** - for each size K, the
+K features whose correlation matrix has the largest smallest eigenvalue
+`lambda_min(R_S)`.
+
+In practice it **kills multicollinearity**: when `X` has near-collinear columns,
+regression and downstream models become unstable and their coefficients hard to
+interpret; `sifters` returns the subset that stays as far as possible from
+singularity, for every K, with no labels required.
+
+This is the min-eigenvalue member of the D-optimal / DPP /
+column-subset-selection family - the same greedy structure as maximum-volume
+selection, but the objective is the worst-case direction. Optimal design theory
+calls this criterion **E-optimal** (maximize the minimum eigenvalue of the
+information matrix); on a correlation matrix it reads `sigma_min(Z_S)^2`.
+
+NP-hard problem -> **nested** families built by greedy, but a greedy
+that affords itself the luxury of being **exact and certified**:
 
 | | |
 |---|---|
-| 🎯 **Qualité** | critère séculaire (et non une simple corrélation), jusqu'à **+82 %** de `λ_min` à K fixe vs le filtre de corrélation naïf |
-| ✅ **Certificat** | **les deux sens** de parcours sont certifiés : élimination arrière *et* sélection avant s'arrêtent sur une borne supérieure valide par candidat |
-| ⚡ **Vitesse** | **10 000 variables → 100 en 0,7 s** (pré-filtre) ; le glouton exact certifié est **×24 à ×30 plus rapide** en sélection avant, **×2,5 à ×3,5** en élimination arrière |
-| 🦀 **Rust sûr** | `#![forbid(unsafe_code)]`, multicœur (`rayon`), zéro dépendance lourde |
-| 🐍 **Python** | `import minvp; minvp.select(X, k=50)` |
+| 🎯 **Quality** | secular criterion (and not a mere correlation), up to **+82 %** of `lambda_min` at fixed K vs the naive correlation filter |
+| ✅ **Certificate** | **both directions** of the traversal are certified: backward elimination *and* forward selection stop on a valid upper bound per candidate |
+| 🏁 **Exact mode** | `select(..., exact=True)` **proves** the optimum at the requested K by branch and bound, or returns a certified optimality gap |
+| ⚡ **Speed** | **10 000 variables -> 100 in 0.7 s** (prefilter); the exact certified greedy is **x24 to x30 faster** in forward selection, **x2.5 to x3.5** in backward elimination |
+| 🦀 **Safe Rust** | `#![forbid(unsafe_code)]`, multicore (`rayon`), zero heavy dependencies |
+| 🐍 **Python** | `import sifters; sifters.select(X, k=50)` |
 
 <p align="center">
-  <img src="docs/fig_qualite.png" alt="Qualité : lambda_min à K fixe, minvp vs heuristiques naïves" width="100%">
+  <img src="docs/img/fig_qualite.png" alt="Quality: lambda_min at fixed K, sifters vs naive heuristics" width="100%">
 </p>
 
-À nombre de variables égal, `minvp` garde un sous-ensemble mieux conditionné que le
-glouton « min-max corrélation » ou le filtre par seuil — l'écart se creuse quand la
-structure latente est riche (facteurs : **+82 %**, blocs : +15 %, AR(1) : +9 %).
+For an equal number of variables, `sifters` keeps a better conditioned subset than the
+"min-max correlation" greedy or the threshold filter - the gap widens when the
+latent structure is rich (factors: **+82 %**, blocks: +15 %, AR(1): +9 %).
 
 <p align="center">
-  <img src="docs/fig_performance.png" alt="Performance : passage à l'échelle et évaluation par l'inverse" width="100%">
+  <img src="docs/img/fig_performance.png" alt="Performance: scaling and evaluation by the inverse" width="100%">
 </p>
 
 ---
 
 ## 1. Installation
 
-```bash
-git clone <ce dépôt> && cd min_vp
-cargo build --release          # -> ./target/release/minvp
-cargo test --release           # 31 tests (bornes, force brute, inverse, réplique implicite…)
-```
-
-Binding Python (extension native PyO3, aucune dépendance obligatoire) :
+The core is a Rust library; usage is through the Python extension (PyO3
+binding), which is the only public interface.
 
 ```bash
-pip install .                  # construit l'extension via maturin -> import minvp
-# ou, en développement :
+pip install .                  # builds the extension via maturin -> import sifters
+# or, in development:
 maturin develop --release
 ```
 
-## 2. Démarrage rapide
+`numpy` is not required at runtime: when present it is only used to convert
+lists and DataFrames into a contiguous `float64` buffer.
 
-### Python
+The wheels are built for a generic CPU. For a local speedup, compile for the host
+CPU explicitly (do not redistribute such a wheel):
+
+```bash
+RUSTFLAGS="-C target-cpu=native" maturin develop --release
+```
+
+> The timings in section 4 were measured with `-C target-cpu=native` on an Apple
+> M1 Max (10 cores).
+
+### Development environment
+
+The project is managed with **pixi** (conda-forge) for the Python environment,
+**Cargo** for the Rust crate and **maturin** (PyO3) for the extension. The pixi
+tasks mirror the CI gates:
+
+```bash
+pixi install            # Python 3.14 + numpy, matplotlib, maturin, pytest, ruff, mypy
+pixi run build          # maturin develop --release
+pixi run test           # cargo test
+pixi run test-py        # pytest tests (run `pixi run build` first)
+pixi run lint           # cargo clippy --workspace --all-targets -- -D warnings
+pixi run lint-py        # ruff check .
+pixi run type-py        # mypy scripts tests
+```
+
+The library unit tests (bounds, brute force, inverse, implicit replica, ...)
+run standalone with a Rust toolchain:
+
+```bash
+cargo test --release
+```
+
+## 2. Quick start
 
 ```python
-import numpy as np, minvp
+import numpy as np, sifters
 
 X = np.random.default_rng(0).normal(size=(500, 300))   # (observations, variables)
 
-r = minvp.select(X, k=30)                 # direction="auto"
+r = sifters.select(X, k=30)                 # direction="auto"
 print(r.subset, r.lambda_min, r.seconds)
 
-courbe = minvp.curve(X, kmin=5)           # {K: lambda_min} pour toute la famille
-famille = minvp.path(X, direction="forward", kmax=100)
-famille.subset_at(42)                     # le sous-ensemble de taille 42
+curve = sifters.curve(X, kmin=5)            # {K: lambda_min} for the whole family
+family = sifters.path(X, direction="forward", kmax=100)
+family.subset_at(42)                      # the subset of size 42
 
-# pré-filtre (heuristique) : n'évalue que le top-16 par étape, ~4 à 12 % de λ_min
-rapide = minvp.select(X, k=30, prefilter=True)
+# prefilter (heuristic): only evaluates the top-16 per step, ~4 to 12 % of lambda_min
+fast = sifters.select(X, k=30, prefilter=True)
+
+# multi-start: tries 4 starting variables and keeps the best family
+# (the gap to the global optimum drops from ~11 % to ~2 % on an AR(1) structure, section 4)
+robust = sifters.select(X, k=30, forward_seeds=4)
+
+# exact mode: proves the optimum at k (branch and bound over all k-subsets)
+proof = sifters.select(X, k=30, forward_seeds=8, exact=True)
+proof.proved_optimal, proof.gap_certified, proof.exact_evals
 ```
 
-Le moteur est une extension native : les tableaux numpy sont lus via le protocole
-tampon, le GIL est libéré pendant le calcul, et `numpy` reste optionnel.
+The engine is a native extension: numpy arrays are read through the buffer
+protocol, the GIL is released during the computation, and `numpy` remains optional.
 
-### Ligne de commande
+The Python benchmarks (scenarios, A/B between revisions) are described in
+[`bench/README.md`](bench/README.md).
 
-```bash
-# 10 000 variables, on en veut 100 : sélection avant séculaire exacte
-minvp --gen blocks --gen-n 50 --gen-m 10000 --blocks 8 --dir forward --kmax 100
+## 3. What `sifters` returns
 
-# même chose en acceptant l'heuristique top-16 (plus rapide, λ_min rogné)
-minvp --gen blocks --gen-n 50 --gen-m 10000 --blocks 8 --dir forward --kmax 100 --prefilter
+A **nested family** `S_M > S_{M-1} > ... > S_1` (mode `backward`) or
+`S_1 < S_2 < ... < S_kmax` (mode `forward`), hence a response for *all* sizes K
+in a single computation, plus:
 
-# données réelles, famille complète décroissante et courbe CSV
-minvp --input data.csv --kmin 5 --subset 5,10,20 --out-csv courbe.csv
+* `curve`: `lambda_min` for each K, revalidated by a strict cold Lanczos;
+* `order`: the order in which variables are removed/added (allows reconstructing any
+  subset);
+* per step: upper bound of the retained candidate, number of candidates evaluated, flag
+  `certified`, residual, Lanczos iterations.
 
-# matrice binaire sur stdin, résultat JSON sur stdout (scripts, CI)
-minvp --stdin-f64 --shape 500,400 --dir forward --kmax 50 --out-json - --stdout
-```
-
-| option | rôle |
-|---|---|
-| `--dir backward\|forward` | élimination arrière (famille complète, certifiée) ou ajout glouton (K petit, certifié aussi) |
-| `--kmin K` / `--kmax K` | bornes du parcours |
-| `--eval auto\|direct\|inverse` | évaluation des candidats par l'inverse maintenu (déf. `auto`) |
-| `--low-rank p` | couples propres utilisés par la borne de Temple (déf. 4). Sans effet en sélection avant certifiée, qui utilise le spectre complet |
-| `--tol`, `--iters-warm`, `--iters-cold` | réglages Lanczos |
-| `--max-exact N` | plafond de candidats évalués par étape (0 = certifié) |
-| `--forward-top N`, `--prefilter` | pré-filtre avant, **désactivé par défaut** (`0` = chaque étape est certifiée optimale) |
-| `--repr auto\|packed\|implicit` | corrélation matérialisée ou implicite `Z_S^T(Z_S x)` |
-| `--mem-budget MB`, `--threads N`, `--block-rows N` | performance |
-| `--subset K[,K…]`, `--out-csv`, `--out-json`, `--no-verify` | sorties |
-
-## 3. Ce que renvoie `minvp`
-
-Une **famille imbriquée** `S_M ⊃ S_{M-1} ⊃ … ⊃ S_1` (mode `backward`) ou
-`S_1 ⊂ S_2 ⊂ … ⊂ S_kmax` (mode `forward`), donc une réponse pour *toutes* les tailles K
-d'un seul calcul, plus :
-
-* `curve` : `λ_min` pour chaque K, revalidée par un Lanczos froid strict ;
-* `order` : l'ordre des variables retirées/ajoutées (permet de reconstruire n'importe quel
-  sous-ensemble) ;
-* par étape : borne supérieure du candidat retenu, nombre de candidats évalués, drapeau
-  `certified`, résidu, itérations Lanczos.
-
-Côté Python, `select` et `path` renvoient un objet `minvp.Selection` :
+On the Python side, `select` and `path` return a `sifters.Selection` object:
 
 ```python
-r.k, r.subset, r.lambda_min       # résultat retenu (indices d'origine, croissants)
-r.curve                           # {K: lambda_min} — toute la famille
-r.subset_at(42), r.lambda_at(42)  # n'importe quelle taille visitée, sans recalcul
-r.steps                           # list[Step] : bornes, candidats, certification, résidus
+r.k, r.subset, r.lambda_min       # retained result (original indices, increasing)
+r.curve                           # {K: lambda_min} - the whole family
+r.subset_at(42), r.lambda_at(42)  # any visited size, without recomputation
+r.steps                           # list[Step]: bounds, candidates, certification, residuals
 r.certified_steps, r.total_exact_evals, r.total_lanczos_iters
 r.seconds, r.path_seconds, r.load_seconds, r.representation, r.eval
-r.to_dict()                       # même contenu, sérialisable JSON
+r.to_dict()                       # same content, JSON-serializable
 ```
 
-`progress=callback` est appelé après chaque étape — renvoyer `False` interrompt
-proprement le parcours (résultat partiel) — `threads=N` fixe la taille du pool
-Rayon, et les `Ctrl-C` sont interceptés pendant le calcul.
+`progress=callback` is called after each step - returning `False` cleanly interrupts
+the traversal (partial result) - `threads=N` sets the size of the Rayon pool,
+and `Ctrl-C` is intercepted during the computation.
 
-## 4. Résultats mesurés
+## 4. Measured results
 
-Machine 10 cœurs, `-C target-cpu=native`, `f64`. Reproductible avec
-`python/make_figures.py`, `python/compare_baseline.py` et `python/bench_numpy.py`.
+10-core machine, `-C target-cpu=native`, `f64`. Reproducible with
+`scripts/make_figures.py`, `scripts/compare_baseline.py` and `scripts/bench_numpy.py`.
 
-### Qualité (λ_min exact, calculé en numpy)
+### Quality (exact lambda_min, computed in numpy)
 
-| jeu | K | **minvp avant** | glouton min-max corr. | filtre par seuil |
+| dataset | K | **sifters forward** | min-max corr. greedy | threshold filter |
 |---|---|---|---|---|
-| blocs (N=500, M=250) | 10 | **0.416** | 0.404 | 0.407 |
+| blocks (N=500, M=250) | 10 | **0.416** | 0.404 | 0.407 |
 | | 30 | **0.317** | 0.266 | 0.277 |
 | | 60 | **0.241** | 0.197 | 0.193 |
-| AR(1) ρ=0.9 | 10 | 0.794 | **0.811** | 0.798 |
+| AR(1) rho=0.9 | 10 | 0.794 | **0.811** | 0.798 |
 | | 30 | 0.306 | 0.279 | **0.324** |
 | | 60 | **0.123** | 0.103 | 0.123 |
-| facteurs (rang 20) | 10 | **0.655** | 0.552 | 0.614 |
+| factors (rank 20) | 10 | **0.655** | 0.552 | 0.614 |
 | | 30 | **0.057** | 0.033 | 0.039 |
 | | 60 | **0.036** | 0.021 | 0.021 |
 
-**Lecture honnête** : le filtre par seuil est excellent et quasi gratuit (1–40 ms) ; il
-reste compétitif sur une structure très régulière (AR(1) à petit K). `minvp` gagne dans la
-majorité des cas, très largement quand la structure latente est riche, et apporte en plus
-la certification et la famille complète.
+**Honest reading**: the threshold filter is excellent and almost free (1-40 ms); it
+remains competitive on a very regular structure (AR(1) at small K). `sifters` wins in the
+majority of cases, very widely when the latent structure is rich, and additionally brings
+certification and the complete family.
 
-### Vitesse
+### Speed
 
-Le tableau donne le **mode exact par défaut** (aucun pré-filtre), c'est-à-dire le
-parcours glouton **certifié** ; `N=500` (avant) / `600` (arrière), machine 10 cœurs.
+The table gives the **default exact mode** (no prefilter), that is, the
+**certified** greedy traversal; `N=500` (forward) / `600` (backward), 10-core machine.
 
-| configuration | temps | candidats évalués exactement |
+| configuration | time | candidates evaluated exactly |
 |---|---|---|
-| avant, M=400, K=50 | **0.2 s** | 392 |
-| avant, M=3 200, K=50 | **0.8 s** | 392 |
-| avant, M=1 600, K=150 | **8.4 s** | 1 192 |
-| avant, M=10 000 (N=50), K=100, `prefilter=True` | 0.74 s | 1 584 |
-| arrière complet, M=200 | **0.85 s** | 6 235 |
-| arrière, M=500, kmin=200, `--eval inverse` | **14.6 s** | 38 392 |
-| idem, `--eval direct` **convergé** (300 itér.) | **102 s** | 33 976 |
+| forward, M=400, K=50 | **0.2 s** | 392 |
+| forward, M=3 200, K=50 | **0.8 s** | 392 |
+| forward, M=1 600, K=150 | **8.4 s** | 1 192 |
+| forward, M=10 000 (N=50), K=100, `prefilter=True` | 0.74 s | 1 584 |
+| full backward, M=200 | **0.85 s** | 6 235 |
+| backward, M=500, kmin=200, `eval="inverse"` | **14.6 s** | 38 392 |
+| same, `eval="direct"` **converged** (300 iter.) | **102 s** | 33 976 |
 
-**Gain mesuré vs la version d'origine** (mêmes entrées, `--no-verify`, `--max-exact 0`,
-`--forward-top 0`) :
+**Measured gain vs the original version** (same inputs, `verify=False`, `max_exact=0`,
+`forward_top=0`):
 
-| scénario | avant | après | gain (1 cœur) |
+| scenario | before | after | gain (1 core) |
 |---|---|---|---|
-| avant, M=400, K=50 | 5.11 s | 0.21 s | **×24** |
-| avant, M=800, K=50 | 9.98 s | 0.36 s | **×28** |
-| avant, M=3 200, K=50 | 36.8 s | 1.22 s | **×30** |
-| avant, M=1 600, K=150 | 266 s | 10.3 s | **×26** |
-| arrière complet, M=200 | 8.75 s | 3.16 s | **×2.8** |
-| arrière, M=500, kmin=200, `inverse` | 193 s | 76.7 s | **×2.5** |
-| arrière, M=500, kmin=200, `direct` convergé | 1835 s | 624 s | **×2.9** |
+| forward, M=400, K=50 | 5.11 s | 0.21 s | **x24** |
+| forward, M=800, K=50 | 9.98 s | 0.36 s | **x28** |
+| forward, M=3 200, K=50 | 36.8 s | 1.22 s | **x30** |
+| forward, M=1 600, K=150 | 266 s | 10.3 s | **x26** |
+| full backward, M=200 | 8.75 s | 3.16 s | **x2.8** |
+| backward, M=500, kmin=200, `inverse` | 193 s | 76.7 s | **x2.5** |
+| backward, M=500, kmin=200, `direct` converged | 1835 s | 624 s | **x2.9** |
 
-Ce qui l'explique :
+What explains it:
 
-* **la sélection avant est certifiée** : elle n'évalue plus les `M−K` candidats, mais
-  s'arrête dès qu'un majorant valide l'autorise. Mieux, en mode exact elle utilise le
-  **spectre complet** de `R_S`, ce qui rend la borne séculaire *exacte* : les
-  évaluations tombent au plancher du lot (8 par étape) et l'on passe de 2,4 M à 392
-  itérations Lanczos sur `fwd3200` ;
-* **l'opérateur bordé** exploite la corrélation matérialisée (`O(k²)` au lieu de
-  `O(Nk)` par matvec) ;
-* **le solveur Lanczos** est allégé : vecteur de Ritz par itération inverse (au lieu
-  d'une diagonalisation `O(m³)` à chaque appel), seconde passe de reorthogonalisation
-  conditionnelle, arrêt sur le **résidu** de Ritz, suite de Sturm à sortie anticipée ;
-* **la graine séculaire d'élimination est enfin utilisée** (`deletion_seed` la
-  restreignait pas à `R^{k-1}`, le solveur la rejetait silencieusement) : ~30 %
-  d'itérations en moins par candidat ;
-* le matvec de l'inverse maintenu n'a plus de branche par élément.
+* **forward selection is certified**: it no longer evaluates the `M-K` candidates, but
+  stops as soon as a valid upper bound allows it. Better still, in exact mode it uses the
+  **full spectrum** of `R_S`, which makes the secular bound *exact*: the
+  evaluations drop to the floor of the batch (8 per step) and we go from 2.4 M to 392
+  Lanczos iterations on `fwd3200`;
+* **the bordered operator** exploits the materialized correlation (`O(k^2)` instead of
+  `O(Nk)` per matvec);
+* **the Lanczos solver** is lightened: Ritz vector by inverse iteration (instead of
+  an `O(m^3)` diagonalization at each call), second conditional reorthogonalization
+  pass, stopping on the Ritz **residual**, Sturm sequence with early exit;
+* **the deletion secular seed is finally used** (`deletion_seed` no longer
+  restricted it to `R^{k-1}`, the solver silently rejected it): ~30 %
+  fewer iterations per candidate;
+* the maintained inverse matvec no longer has a per-element branch.
 
-Détail et protocole de mesure dans [`bench/final_report.md`](bench/final_report.md).
+Details and measurement protocol (history, CLI binary) in
+[`bench/final_report.md`](bench/final_report.md); the current benchmarks, in
+Python, are in [`bench/README.md`](bench/README.md).
 
-### Vitesse vs une implémentation naïve 100 % Python / numpy
+### Speed vs a naive 100 % Python / numpy implementation
 
-`python/bench_numpy.py` chronomètre `minvp` face à un glouton E-optimal **naïf qui
-attaque le même problème**, entièrement en numpy : à chaque étape, *tous* les candidats
-restants sont réévalués en recalculant `λ_min` par une décomposition
-`numpy.linalg.eigvalsh` complète — soit `K · M` décompositions de taille `≈ K`. Trois
-séries sont comparées :
+`scripts/bench_numpy.py` times `sifters` against a **naive E-optimal greedy that
+attacks the same problem**, entirely in numpy: at each step, *all* the candidates
+remaining are re-evaluated by recomputing `lambda_min` with a complete
+`numpy.linalg.eigvalsh` decomposition - that is `K x M` decompositions of size `~ K`. Three
+series are compared:
 
-* **minvp sans pré-filtre** (`prefilter=False`, **le défaut**) — le même glouton
-  E-optimal que le naïf, certifié mais **sans évaluer tous les candidats** à chaque
-  étape (tri par borne séculaire décroissante) ; le `λ_min` obtenu reste identique au
-  naïf à `5·10⁻¹⁴` près là où les deux évaluent les mêmes candidats ;
-* **minvp avec pré-filtre** (`prefilter=True`, top-16) — n'évalue que les 16 meilleurs
-  candidats du score séculaire : c'est une heuristique, activée **explicitement** par
-  l'appelant (jamais automatiquement selon la taille) ;
-* **naïf numpy** — la référence `eigvalsh`.
+* **sifters without prefilter** (`prefilter=False`, **the default**) - the same
+  E-optimal greedy as the naive one, certified but **without evaluating all candidates** at each
+  step (sorted by decreasing secular bound); the `lambda_min` obtained remains identical to the
+  naive one to within `5x10^-14` where both evaluate the same candidates;
+* **sifters with prefilter** (`prefilter=True`, top-16) - only evaluates the 16 best
+  candidates of the secular score: this is a heuristic, enabled **explicitly** by
+  the caller (never automatically according to size);
+* **naive numpy** - the `eigvalsh` reference.
 
-L'écart de temps entre les séries 1 et 2 mesure donc exactement ce que le pré-filtre
-apporte (et ce qu'il coûte en optimalité).
+The time gap between series 1 and 2 therefore measures exactly what the prefilter
+brings (and what it costs in optimality).
 
 <p align="center">
-  <img src="docs/fig_temps_vs_numpy.png" alt="Temps : minvp (Rust) vs glouton E-optimal naïf en numpy" width="100%">
+  <img src="docs/img/fig_temps_vs_numpy.png" alt="Time: sifters (Rust) vs naive E-optimal greedy in numpy" width="100%">
 </p>
 
-> ⚠️ **Tables ci-dessous mesurées avant l'optimisation du chemin exact** : la colonne
-> « minvp exact » y est surestimée d'un facteur ~2,5 (voir §4 « Vitesse » et
-> [`bench/final_report.md`](bench/final_report.md)). Les colonnes pré-filtre et naïf
-> numpy restent valables ; `python/bench_numpy.py` permet de rafraîchir l'ensemble.
+> ⚠️ **Tables below measured before the optimization of the exact path**: the column
+> "sifters exact" there is overestimated by a factor of ~2.5 (see section 4 "Speed" and
+> [`bench/final_report.md`](bench/final_report.md)). The prefilter and naive
+> numpy columns remain valid; `scripts/bench_numpy.py` can refresh the whole set.
 
-Balayage en nombre de variables (`N=500`, `K=50`):
+Sweep over the number of variables (`N=500`, `K=50`):
 
-| M | minvp pré-filtre | minvp exact (défaut) | naïf numpy | naïf ÷ pré-filtre |
+| M | sifters prefilter | sifters exact (default) | naive numpy | naive / prefilter |
 |---|---|---|---|---|
-| 200 | **0.11 s** | 0.46 s | 0.28 s | ×2.5 |
-| 400 | **0.12 s** | 0.87 s | 0.62 s | ×5.0 |
-| 800 | **0.13 s** | 1.54 s | 1.27 s | ×9.6 |
-| 1 600 | **0.19 s** | 3.05 s | 2.72 s | ×14 |
-| 3 200 | **0.41 s** | 6.06 s | 5.44 s | ×13 |
-| 6 400 | **1.18 s** | 12.0 s | 10.9 s | ×9.3 |
+| 200 | **0.11 s** | 0.46 s | 0.28 s | x2.5 |
+| 400 | **0.12 s** | 0.87 s | 0.62 s | x5.0 |
+| 800 | **0.13 s** | 1.54 s | 1.27 s | x9.6 |
+| 1 600 | **0.19 s** | 3.05 s | 2.72 s | x14 |
+| 3 200 | **0.41 s** | 6.06 s | 5.44 s | x13 |
+| 6 400 | **1.18 s** | 12.0 s | 10.9 s | x9.3 |
 
-Balayage en taille de sous-ensemble (`N=500`, `M=800`) :
+Sweep over subset size (`N=500`, `M=800`):
 
-| K | minvp pré-filtre | minvp exact (défaut) | naïf numpy | naïf ÷ pré-filtre |
+| K | sifters prefilter | sifters exact (default) | naive numpy | naive / prefilter |
 |---|---|---|---|---|
-| 10 | **0.03 s** | 0.06 s | 0.06 s | ×2.0 |
-| 20 | **0.04 s** | 0.24 s | 0.17 s | ×4.3 |
-| 40 | **0.10 s** | 1.01 s | 0.72 s | ×7.0 |
-| 80 | **0.36 s** | 4.57 s | 4.49 s | ×13 |
-| 120 | **0.94 s** | 11.3 s | 14.0 s | ×15 |
+| 10 | **0.03 s** | 0.06 s | 0.06 s | x2.0 |
+| 20 | **0.04 s** | 0.24 s | 0.17 s | x4.3 |
+| 40 | **0.10 s** | 1.01 s | 0.72 s | x7.0 |
+| 80 | **0.36 s** | 4.57 s | 4.49 s | x13 |
+| 120 | **0.94 s** | 11.3 s | 14.0 s | x15 |
 
-Ce que le pré-filtre coûte en qualité (panneau (c) : `λ_min` pré-filtré vs exact) :
+What the prefilter costs in quality (panel (c): `lambda_min` prefiltered vs exact):
 
 | `M` (K=50) | 200 | 400 | 800 | 1 600 | 3 200 | 6 400 |
 |---|---|---|---|---|---|---|
-| perte de `λ_min` | −4.1 % | −3.8 % | −6.0 % | −8.1 % | −10.0 % | −11.6 % |
+| loss of `lambda_min` | -4.1 % | -3.8 % | -6.0 % | -8.1 % | -10.0 % | -11.6 % |
 
 | `K` (M=800) | 10 | 20 | 40 | 80 | 120 |
 |---|---|---|---|---|---|
-| perte de `λ_min` | −6.1 % | −4.9 % | −8.5 % | −6.6 % | −5.6 % |
+| loss of `lambda_min` | -6.1 % | -4.9 % | -8.5 % | -6.6 % | -5.6 % |
 
-**Lecture honnête** — le naïf n'est pas un épouvantail :
+**Honest reading** - the naive one is not a scarecrow:
 
-1. **À algorithme strictement égal, numpy tient tête — avant l'optimisation du chemin
-   exact.** Quand `minvp` évaluait *tous* les candidats comme le naïf, il faisait jeu
-   égal : plus lent à petit `M`/`K`, à peine devant à `K=120` (11,3 s contre 14,0 s).
-   `numpy.linalg.eigvalsh` (LAPACK) est très optimisé ; depuis, le mode exact de
-   `minvp` **n'évalue plus tous les candidats** (certification par borne séculaire) et
-   le bat nettement, mais l'accélération ne vient toujours pas d'un meilleur solveur
-   spectral : elle vient du fait qu'il évalue *beaucoup moins de candidats* (bornes,
-   certification dans les deux sens, inverse maintenu, et pré-filtre si on l'active).
-2. **Le pré-filtre accélère partout, mais se paie en qualité.** Il divise le temps du
-   glouton exact par 2 à 16 selon la configuration, au prix de **4 à 12 %** de `λ_min`
-   — pire cas mesuré : −11,6 % à `M = 6 400`. Il n'est **jamais activé automatiquement** :
-   c'est un choix explicite (`prefilter=True` côté Python, `--prefilter` en CLI), y
-   compris à petit `M` puisque l'ancien garde-fou « exact en dessous de 512 » a disparu.
-   Comme la bascule dépend du problème, c'est à l'utilisateur de trancher.
-3. **Bilan** : le naïf `eigvalsh` est un excellent choix pour de petits problèmes ; le
-   mode par défaut de `minvp` (glouton exact) est le bon compromis dès que `M` grandit ou
-   que l'on veut toute la famille imbriquée certifiée d'un seul calcul. Le pré-filtre est
-   là quand on préfère la vitesse à quelques pour cent de `λ_min`.
+1. **With a strictly equal algorithm, numpy holds its own - before the optimization of the
+   exact path.** When `sifters` evaluated *all* the candidates like the naive one, it was
+   on equal footing: slower at small `M`/`K`, barely ahead at `K=120` (11.3 s versus 14.0 s).
+   `numpy.linalg.eigvalsh` (LAPACK) is very optimized; since then, the exact mode of
+   `sifters` **no longer evaluates all the candidates** (certification by secular bound) and
+   beats it clearly, but the speedup still does not come from a better spectral
+   solver: it comes from the fact that it evaluates *far fewer candidates* (bounds,
+   certification in both directions, maintained inverse, and prefilter if enabled).
+2. **The prefilter speeds up everywhere, but is paid for in quality.** It divides the time of the
+   exact greedy by 2 to 16 depending on the configuration, at the cost of **4 to 12 %** of `lambda_min`
+   - worst case measured: -11.6 % at `M = 6 400`. It is **never enabled automatically**:
+   it is an explicit choice (`prefilter=True`), including
+   at small `M` since the old guard "exact below 512" has disappeared.
+   As the switch depends on the problem, it is up to the user to decide.
+3. **Bottom line**: the naive `eigvalsh` is an excellent choice for small problems; the
+   default mode of `sifters` (exact greedy) is the right trade-off as soon as `M` grows or
+   when one wants the whole certified nested family in a single computation. The prefilter is
+   there when one prefers speed to a few percent of `lambda_min`.
 
-## 5. Comment ça marche
+### Gap to the global optimum (measured by brute force)
 
-> Version détaillée, formules et invariants complets : **[`ALGORITHME.md`](ALGORITHME.md)**.
+The greedy is myopic: "certified" qualifies each **step**, not the subset. To
+quantify the gap, `sifters` was compared to the global optimum obtained by enumerating **all**
+the `C(M,K)` combinations (`M <= 30`, `N = 400`, average of 3 seeds):
 
-### 5.1 Le bon critère : l'équation séculaire
+| structure | K | `forward_seeds=1` | `=2` | `=4` | `=8` | all (`=M`) | backward |
+|---|---|---|---|---|---|---|---|
+| iid | 3 | 0.83 % | 0.55 % | 0.30 % | 0.17 % | **0.01 %** | 2.10 % |
+| iid | 8 | 1.64 % | 1.17 % | 0.97 % | 0.72 % | **0.36 %** | 4.11 % |
+| AR(1) rho=0.9 | 3 | 10.93 % | 4.23 % | 2.11 % | 1.01 % | **0.02 %** | 16.68 % |
+| AR(1) rho=0.9 | 5 | 11.91 % | 7.35 % | 5.84 % | 4.12 % | **1.37 %** | 26.94 % |
+| AR(1) rho=0.9 | 8 | 12.86 % | 9.90 % | 7.89 % | 6.73 % | **4.29 %** | 23.84 % |
 
-Les valeurs propres de la sous-matrice privée de l'indice `i` sont **exactement** les
-racines de (conditions KKT de `min xᵀR x` sous `x_i = 0`) :
+<p align="center">
+  <img src="docs/img/fig_ecart_seeds.png" alt="Gap to the global optimum according to the number of starts in forward selection" width="100%">
+</p>
+
+Three lessons:
+
+* **the gap does not diverge with M**: it rises from `M ~ 10` to `M ~ 20`, then plateaus. The
+  determining parameter is `M - K` (the number of variables "in excess"), not `M`;
+* **most of the forward gap comes from the initial seed**, not from the greedy rule:
+  all single variables have `lambda_min = 1`, so the first step is not guided by
+  the objective. Hence `forward_seeds`, which brings 10.9 % -> 0.02 % at `K = 3` on AR(1);
+* **backward elimination remains far behind** in quality (10 to 30 %): its myopia is
+  intrinsic, unlike that of the forward start.
+
+### Exact mode: proving the optimum at K
+
+`select(X, k=..., exact=True)` closes the gap: a branch and bound explores the
+`k`-subsets and either **proves** the optimum or returns a **certified optimality
+gap**.
+
+The bound costs nothing. `lambda_min` is monotonically non-increasing as the set
+grows (Cauchy interlacing: `R_S` is a principal submatrix of `R_T` for
+`S subset T`, hence `lambda_min(R_S) >= lambda_min(R_T)`). The value of a partial
+set therefore upper-bounds every completion of it, and the search only ever
+evaluates `f(S + {j})` - exactly the quantity it needs to order the children. The
+greedy family then supplies the incumbent, which is what makes the proof cheap.
+
+Time to prove optimality (N=400, incumbent `forward_seeds=8`, 120 s budget,
+`bench/exact.py`):
+
+| structure | K | M=20 | M=30 | M=40 | M=60 | M=80 |
+|---|---|---|---|---|---|---|
+| iid | 5 | 0.03 s | 0.03 s | 0.04 s | 0.11 s | 0.20 s |
+| iid | 8 | 0.21 s | 0.79 s | 1.3 s | 4.7 s | 13.4 s |
+| iid | 12 | 4.9 s | 55.6 s | *gap 13.7 %* | *12.4 %* | *12.1 %* |
+| AR(1) rho=0.9 | 5 | 0.04 s | 0.09 s | 0.25 s | 1.2 s | 1.1 s |
+| AR(1) rho=0.9 | 8 | 0.28 s | 1.6 s | 8.0 s | 43.5 s | *gap 0.77 %* |
+| AR(1) rho=0.9 | 12 | 2.4 s | 50.6 s | *gap 4.5 %* | *3.0 %* | *2.0 %* |
+
+*Italic* cells hit the 120 s budget: the search returns its best subset together
+with the relative gap that still separates it from the optimum, so the answer
+stays usable and honest.
+
+<p align="center">
+  <img src="docs/img/fig_exact.png" alt="Exact mode: time to prove optimality at K, for K = 5, 8 and 12" width="100%">
+</p>
+
+Two practical points:
+
+* the exact search does not only certify, it **improves**: on AR(1) it gains
+  between +0 % and +20 % of `lambda_min` over the multi-start greedy (for
+  instance +19.7 % at `M = 80, K = 8`, where the proof times out but the
+  incumbent is already much better);
+* `K` is the cost driver, far more than `M`: on AR(1), `K = 12` at `M = 80` is
+  as expensive as `K = 12` at `M = 40`. For `K <= 8` and `M <= 80` the proof
+  lands in seconds.
+
+## 5. How it works
+
+> Detailed version, formulas and complete invariants: **[`docs/algorithm.md`](docs/algorithm.md)**.
+
+### 5.1 The right criterion: the secular equation
+
+The eigenvalues of the submatrix with index `i` removed are **exactly** the
+roots of (KKT conditions of `min x^T R x` under `x_i = 0`):
 
 ```
-S_i(μ) = Σ_l u_l(i)² / (λ_l − μ) = 0 ,      plus petite racine dans (λ_1, λ_2)
-vecteur propre exact :  x = (R − μI)⁻¹ e_i
+S_i(mu) = sum_l u_l(i)^2 / (lambda_l - mu) = 0 ,      smallest root in (lambda_1, lambda_2)
+exact eigenvector:  x = (R - mu I)^-1 e_i
 ```
 
-Pour un **ajout**, la matrice bordée `[[R_S, c],[cᵀ, 1]]` donne
-`1 − μ = Σ_l (u_l·c)²/(λ_l − μ)` et `x = [−(R_S−μI)⁻¹c ; 1]`. Ces deux identités
-fournissent à la fois le **critère de classement**, les **bornes** et les **démarrages à
-chaud** de Lanczos — c'est ce qui distingue `minvp` d'un simple filtre de corrélation :
-la perte au premier ordre vaut `Σ_l g_l²/(λ_l−λ_1)`, pondérée par la proximité des
-directions propres, et non `|g_1|`.
+For an **addition**, the bordered matrix `[[R_S, c],[c^T, 1]]` gives
+`1 - mu = sum_l (u_l x c)^2/(lambda_l - mu)` and `x = [-(R_S - mu I)^-1 c ; 1]`. These two identities
+provide both the **ranking criterion**, the **bounds** and the **warm starts** of
+Lanczos - this is what distinguishes `sifters` from a simple correlation filter:
+the first-order loss equals `sum_l g_l^2/(lambda_l - lambda_1)`, weighted by the proximity of the
+eigen-directions, and not `|g_1|`.
 
-### 5.2 La cascade certifiée (élimination arrière)
-
-```
-1. y = R_S u ; rq = uᵀy                              (1 matvec)
-2. borne_i = min(Rayleigh_i, Temple_i) pour chaque candidat        O(p·k)
-   · Rayleigh : ρ_i = (rq − 2u_i y_i + u_i²)/(1−u_i²)   — valide pour tout u, O(1)
-   · Temple p-dimensionnelle : queue minorée par Cauchy–Schwarz, ~25× plus serrée
-3. trier par borne DÉCROISSANTE, évaluer exactement jusqu'à ce que
-   meilleure_valeur ≥ borne du candidat suivant   →  étape CERTIFIÉE
-```
-
-### 5.3 Évaluation par l'inverse maintenu (`--eval inverse`)
-
-`λ_min(R_{-i})` est la plus **grande** valeur propre de `R_{-i}^{-1}`, et l'inversion
-amplifie les écarts relatifs du bas du spectre (amas `{0.0050, 0.0057,…}` → `{200, 175,…}`).
-On maintient `W = R⁻¹` **sans factorisation par candidat** :
+### 5.2 The certified cascade (backward elimination)
 
 ```
-A⁻¹ = W_{-i,-i} − (1/W_ii) w wᵀ ,  w = W_{·,i}     (rang 1, O(k²))
+1. y = R_S u ; rq = u^T y                              (1 matvec)
+2. bound_i = min(Rayleigh_i, Temple_i) for each candidate        O(p x k)
+   - Rayleigh: rho_i = (rq - 2u_i y_i + u_i^2)/(1-u_i^2)   - valid for any u, O(1)
+   - Temple p-dimensional: tail lower-bounded by Cauchy-Schwarz, ~25x tighter
+3. sort by DECREASING bound, evaluate exactly until
+   best_value >= bound of the next candidate   ->  step CERTIFIED
 ```
 
-soit ~20 itérations de Lanczos au lieu de 100–150, à précision **meilleure**.
+### 5.3 Evaluation by the maintained inverse (`eval="inverse"`)
 
-### 5.4 Ingénierie numérique
+`lambda_min(R_{-i})` is the **largest** eigenvalue of `R_{-i}^-1`, and the inversion
+amplifies the relative gaps at the bottom of the spectrum (cluster `{0.0050, 0.0057,...}` -> `{200, 175,...}`).
+We maintain `W = R^-1` **without factorization per candidate**:
 
-* Lanczos reorthogonalisé, contraintes d'orthogonalité **explicites** pour la déflation
-  (l'éclatement par opérateur projeté `(I−P)A` est instable : amplification `α/β`) ;
-* détection de sous-espace invariant (pas de valeurs propres parasites par amplification
-  du bruit) ;
-* `--repr implicit` (`R x = Z_S^T(Z_S x)`, `O(Nk)`) quand `N ≪ k` ;
-* triangle inférieur *packed*, construction GEMM bloquée parallèle, matvec vectorisable,
-  suppression de variable en `O(k)` par échange ligne/colonne ;
-* `--repr` / `--eval` choisis automatiquement selon `M`, `N`, la mémoire et la définitude.
+```
+A^-1 = W_{-i,-i} - (1/W_ii) w w^T ,  w = W_{.,i}     (rank 1, O(k^2))
+```
 
-## 6. Structure
+that is ~20 Lanczos iterations instead of 100-150, at **better** accuracy.
 
-**[`ALGORITHME.md`](ALGORITHME.md)** décrit l'algorithme en détail (formules, bornes,
-certification, complexités, paramètres).
+### 5.4 Numerical engineering
+
+* reorthogonalized Lanczos, **explicit** orthogonality constraints for deflation
+  (the blow-up by projected operator `(I-P)A` is unstable: amplification `alpha/beta`);
+* invariant subspace detection (no spurious eigenvalues from amplification
+  of noise);
+* `representation="implicit"` (`R x = Z_S^T(Z_S x)`, `O(Nk)`) when `N << k`;
+* *packed* lower triangle, blocked parallel GEMM construction, vectorizable matvec,
+  variable removal in `O(k)` by row/column swap;
+* `representation` / `eval` chosen automatically according to `M`, `N`, memory and definiteness.
+
+## 6. Beyond the linear link: selecting on any dependence
+
+Everything above maximizes `lambda_min(R_S)` where `R` is the **linear**
+correlation matrix. Two variables linked by `y = x**2` are invisible to it (their
+correlation is ~0 whatever the link strength). The engine itself only needs a
+symmetric PSD matrix with unit diagonal, i.e. the Gram matrix of normalized
+columns, so the whole machinery extends unchanged to any **dependence matrix**
+`D` with `D_ij = 0` meaning "columns `i` and `j` are independent".
+
+| method | link it sees | cost |
+|---|---|---|
+| `linear` | linear (historical) | `O(M^2 N)` |
+| `rank` | any **monotone** link (Gaussian copula / normal scores) | `O(M^2 N)` |
+| `dcor` | any link, `0` iff independent | `O(M^2 N^2)`, `O(M N^2)` memory |
+| `hsic` | any link (RBF kernel), PSD by construction | `O(M^2 N^2)` |
+| `nmi` | any link, histogram estimate | `O(M^2 N)` |
+
+Maximizing `lambda_min(D_S)` then means: make the sub-joint as close as possible
+to the product of its marginals. Because `trace(D_S) = K` for a unit diagonal,
+`lambda_min(D_S) >= 1 - eps` squeezes every eigenvalue into
+`[1 - eps, 1 + (K-1) eps]`, hence `det(D_S)` close to 1 and a Gaussian total
+correlation `TC(S) = -0.5 log det(D_S) <= -K/2 * log(1 - eps)`.
+
+```python
+import sifters
+D = sifters.dependence_matrix(X, method="dcor")           # (M, M), unit diagonal
+r = sifters.select_from_dependence(D, k=50, exact=True)   # certified E-optimal
+# end to end:
+r = sifters.select_dependence(X, k=50, method="dcor")
+```
+
+`dcor` and `nmi` are not guaranteed PSD: `select_from_dependence` clips the
+negative eigenvalues of `D` and rescales the diagonal to 1 before factoring
+`D = B^T B` and handing `B` to the existing engine (`center=False`). Since the
+engine only ever sees a Gram matrix - the same contract as `Z^T Z` - the
+certification, the exact branch and bound and every option of `select` keep
+working verbatim.
+
+### Invariance to the scaling of each feature
+
+With the default settings, all five measures are invariant to a per-feature
+**positive affine rescaling** `x_j -> a_j x_j + b_j` (`a_j > 0`): the dependence
+matrix `D` is unchanged (up to floating point) and so is the selected subset.
+The result therefore does not depend on the units or the offset of the features
+- `linear` is the usual Pearson correlation, `rank` compares ranks, `dcor` is
+invariant to translation and scaling by construction, `hsic` adapts its
+bandwidth with the median heuristic, and `nmi` bins uniformly over the observed
+range (a scaling moves the bin edges with the data). Two caveats:
+
+* `hsic` with an explicit `sigma` (instead of the default median heuristic)
+  **loses** the invariance: the bandwidth must follow the amplitude of the
+  feature.
+* the two *signed* measures (`linear`, `rank`) change when a feature is
+  **reflected** (`x_j -> -x_j`), because the sign of a correlation is
+  meaningful. `dcor`, `hsic` and `nmi` measure the magnitude of the dependence
+  and are invariant to a reflection.
+
+Note also that the plain engine call `sifters.select(X, center=True)` (the
+default) is scale-invariant because it uses the correlation matrix, whereas
+`center=False` uses the cosine matrix, which is invariant to a scaling of each
+column but **not** to a shift.
+
+### A ground-truth experiment: recovering the independent features
+
+`scripts/independence_recovery.py` checks the claim on a problem whose answer is
+known by construction. `M = 19` features are generated from **4 independent
+latent sources**: each source produces 4 features through a different link -
+`s`, `s**2`, `tanh(2s)`, `sin(2s)` - plus noise, and 3 further features are pure
+independent noise. The number of truly independent directions is therefore
+**7**, and the ideal answer for `k = 7` is **exactly one feature per source**.
+
+<p align="center">
+  <img src="docs/img/fig_recovery_setup.png" alt="Generative model, distance correlation and linear correlation" width="100%">
+</p>
+
+Panel (a) is the generative model. Panel (b) is the distance-correlation matrix
+of the data: it is block diagonal, ~0.9 inside a source and ~0.05 between
+sources, so the dependence structure is exactly the one the selector is asked to
+find. Panel (c) is the absolute linear correlation: the block of source 0 is
+almost entirely dark, because `s` and `s**2` are uncorrelated and so is
+`sin(2s)`. A correlation-based criterion sees those features as independent and
+has no reason to keep only one of them - this is the trap.
+
+<p align="center">
+  <img src="docs/img/fig_recovery_result.png" alt="Features selected by each method" width="100%">
+</p>
+
+Asking each method for `k = 7` and scoring the returned subset on the **true**
+(distance-correlation) matrix:
+
+| method | `lambda_min(D_dcor)` of the subset | one feature per source |
+|---|---|---|
+| `linear` | 0.475 | no - source 0 kept twice, one independent feature missed |
+| `rank` | 0.733 | no - sources 1 and 3 kept twice |
+| `dcor` | **0.953** | **yes** |
+| `hsic` | 0.952 | **yes** |
+| `nmi` | 0.947 | **yes** |
+
+Panel (a) counts the features kept per source (1 is correct; a red box flags a
+violation) and panel (b) shows which features were kept. The nonlinear measures
+return one feature per source - they recover the independent directions - while
+`linear` and `rank` spend two of their seven slots on a single source. The
+subsets are still "optimal" for their own criterion, which is precisely why the
+wrong dependence measure cannot be detected by looking at its own `lambda_min`:
+scored against the truth, the linear subset loses half of its conditioning
+(0.475 vs 0.953).
+
+`tests/test_independence_recovery.py` asserts the experiment: one feature per
+group for `dcor`, `hsic`, `nmi` and for the D-optimal criterion, stable over
+seeds, and - conversely - that `rank` does recover as soon as the links are
+monotone. The two figures are regenerated with
+
+```bash
+python3 scripts/make_recovery_figures.py     # requires matplotlib
+```
+
+
+### The D-optimal criterion: minimize the total correlation directly
+
+E-optimality *implies* a small total correlation but does not optimize it (it
+controls the worst direction). When the target is literally "the sub-joint
+closest to the product of the marginals", the Gaussian multi-information
+`TC(S) = -0.5 log det(D_S)` is the right objective:
+
+```python
+d = sifters.dopt.select(D, k=50, exact=True)   # max log det(D_S), branch and bound
+d.subset, d.det, d.proved_optimal, d.total_correlation
+```
+
+`sifters.dopt` is a pure-Python reference solver: a forward greedy with a rank-1
+inverse update, and an exact branch and bound that is valid because `det(D_S)`
+is non-increasing as the set grows (the Schur complement is `<= 1`), so any
+partial set upper-bounds all its completions. The certified Rust engine remains
+the E-optimal one.
+
+### Pairwise is not joint
+
+All the measures above are **pairwise**. `D = I` means "all pairs are
+independent", which is equivalent to the joint being the product of the
+marginals for a pairwise Markov random field or a Gaussian copula, but not for a
+general distribution with genuine higher-order (three-way and beyond)
+interactions. Detecting those requires an estimate of the joint entropy
+`H(X_S)`, which breaks the interlacing/monotonicity structure that the
+certification relies on. `lambda_min(D_S)` and `log det(D_S)` remain tractable,
+certificate-friendly surrogates.
+
+## 7. Structure
+
+**[`docs/algorithm.md`](docs/algorithm.md)** describes the algorithm in detail (formulas, bounds,
+certification, complexities, parameters).
 
 ```
 src/
-  matrix.rs   données N×M (colonnes-major), centrage/normalisation, colonnes dégénérées
-  gen.rs      générateurs synthétiques (iid, équi, AR(1), blocs, facteurs) + RNG
-  io.rs       texte/CSV, binaire f32/f64, stdin f64 (CLI)
-  packed.rs   triangle inférieur packed : construction parallèle, matvec, échanges
-  op.rs       SymOp, représentations packed/implicite, sous-matrices, GEMV Z·w / Zᵀ·w
-  inverse.rs  inverse maintenu (Cholesky initial + mise à jour rang 1), opérateur −A⁻¹
-  lanczos.rs  Lanczos reorthogonalisé + contraintes, bissection/Sturm
-  jacobi.rs   Jacobi cyclique dense (vecteurs propres de la tridiagonale)
-  greedy.rs   cascade certifiée, glouton séculaire, échanges locaux, bornes, KKT
-  report.rs   console, CSV, JSON ;  cli.rs  analyse des arguments
-python/
-  minvp/__init__.py     API Python : select / path / curve, conversion des entrées
-  minvp/__init__.pyi    stubs de typage (+ _minvp.pyi, py.typed)
-  make_figures.py       génère les deux figures de ce README
-  bench_numpy.py        chronométrage vs glouton naïf numpy (docs/fig_temps_vs_numpy.png)
-  compare_baseline.py   comparaison qualité/temps vs filtre de corrélation
-  test_minvp.py         tests du binding (numpy comme oracle)
+  matrix.rs   N x M data (column-major), centering/scaling, degenerate columns
+  gen.rs      synthetic generators (iid, equi, AR(1), blocks, factors) + RNG
+              - compiled only for unit tests and examples/prof.rs
+  packed.rs   packed lower triangle: parallel construction, matvec, swaps
+  op.rs       SymOp, packed/implicit representations, submatrices, GEMV Z x w / Z^T x w
+  inverse.rs  maintained inverse (initial Cholesky + rank-1 update), operator -A^-1
+  lanczos.rs  reorthogonalized Lanczos + constraints, bisection/Sturm
+  jacobi.rs   dense cyclic Jacobi (eigenvectors of the tridiagonal)
+  dense.rs    dense symmetric eigendecomposition (whole-spectrum fast path)
+  exact.rs    exact branch and bound over subsets of a fixed size
+  greedy.rs   certified cascade, secular greedy, local swaps, bounds, KKT
+  lib.rs      public surface of the crate
 crates/
-  minvp-python/         extension native PyO3 -> module minvp._minvp
-pyproject.toml          build backend maturin (pip install . / maturin develop)
+  sifters-python/         native PyO3 extension -> module sifters._sifters
+python/
+  sifters/__init__.py     Python API: select / path / curve, input conversion
+  sifters/dependence.py   dependence matrices: rank/copula, dcor, HSIC, NMI
+  sifters/dopt.py         D-optimal solver (max log det, greedy + exact B&B)
+  sifters/__init__.pyi    typing stubs (+ _sifters.pyi, py.typed)
+scripts/
+  make_figures.py       generates the quality / performance README figures
+  bench_numpy.py        timing vs naive numpy greedy (docs/img/fig_temps_vs_numpy.png)
+  compare_baseline.py   quality/time comparison vs naive baselines (+ shared make_data)
+  independence_recovery.py  ground-truth demo (recover the independent features)
+  make_recovery_figures.py  generates docs/img/fig_recovery_*.png (needs matplotlib)
+tests/
+  test_sifters.py         binding tests (numpy as oracle)
+  test_dependence.py    tests of the nonlinear dependence extension
+  test_independence_recovery.py  ground-truth recovery tests
+bench/        Python benchmark harnesses (see bench/README.md)
+docs/
+  algorithm.md          the algorithm in detail (formulas, bounds, invariants)
+  python_api.md         full Python API reference
+  img/                  README figures + raw measurements
+examples/
+  prof.rs               Rust profiling driver (keeps Python out of the profile)
+pyproject.toml          maturin build backend (pip install . / maturin develop)
+pixi.toml               dev environment + tasks
 ```
 
-## 7. Limites connues
+## 8. Documentation
 
-* **Cas singulier (`M > N`)** : pas d'inverse → évaluations directes à 60–200 itérations.
-  Un préconditionneur adapté reste à trouver.
-* **Glouton myope** : la famille imbriquée n'est pas globalement optimale ;
-  `--swap-passes n` corrige localement par échanges 1-contre-1.
-* **Certification** : elle utilise des bornes supérieures valides mais dont la marge
-  dépend de la précision des `p` couples propres ; en mode `direct --iters-warm 60` les
-  évaluations ne sont pas convergées (utiliser `--eval inverse`, ou augmenter `--iters-warm`).
-* **Binding Python** : extension native PyO3 (`crates/minvp-python`), GIL libéré pendant
-  le calcul ; l'installation exige une chaîne de build Rust (`maturin`, voir §1).
-* **Pré-filtre avant** : heuristique explicite, désactivée par défaut ; l'activer
-  accélère les grands `M` mais peut rogner `λ_min` de 4 à 12 % (§4).
+- [`docs/algorithm.md`](docs/algorithm.md) - the algorithm in detail (formulas,
+  bounds, certification, invariants, parameters);
+- [`docs/python_api.md`](docs/python_api.md) - full Python API reference;
+- [`bench/README.md`](bench/README.md) - benchmark harnesses and scenarios;
+- [`bench/final_report.md`](bench/final_report.md) - historical exact-path
+  measurements (CLI era);
+- [`CHANGELOG.md`](CHANGELOG.md) - release history and known caveats.
 
-## 8. Licence
+## 9. Known limitations
 
-MIT OR Apache-2.0.
+* **Singular case (`M > N`)**: no inverse -> direct evaluations at 60-200 iterations.
+  A suitable preconditioner remains to be found.
+* **Myopic greedy**: the nested family is not globally optimal;
+  `swap_passes=n` corrects locally by 1-for-1 swaps, and
+  `forward_seeds=n` (mode `forward`) tries several starting variables and keeps the
+  best family - the residual gap to the global optimum then goes from ~11 % to ~0.02 %
+  on an AR(1) structure at `K = 3` (section 4).
+* **Certification**: it uses valid upper bounds, but whose margin
+  depends on the accuracy of the `p` eigenpairs; with `eval="direct"` and
+  `iters_warm=60` the evaluations are not converged (use `eval="inverse"`,
+  or increase `iters_warm`).
+* **Python binding**: native PyO3 extension (`crates/sifters-python`), GIL released during
+  the computation; installation requires a Rust build chain (`maturin`, see section 1).
+* **Forward prefilter**: explicit heuristic, disabled by default; enabling it
+  speeds up large `M` but can shave `lambda_min` by 4 to 12 % (section 4).
+* **Exact mode**: it targets a single `K` and breaks the "whole family in one
+  pass" promise, so the nested `curve`/`steps` still come from the greedy walk
+  that seeded it. The worst case is exponential and the cost is driven by `K`:
+  past the budget the search returns a certified gap instead of a proof
+  (section 4).
+* **Dependence measures** (section 6): `dcor` and `hsic` cost `O(M^2 N^2)` and
+  materialize `M` matrices of size `N^2`; they are meant for moderate `N` /
+  `M`. All measures are **pairwise**, so higher-order interactions are not
+  captured. The D-optimal solver is a Python reference (not the certified Rust
+  engine) and its branch and bound is exponential in the worst case.
+
+## 10. License
+
+Dual licensed under either of
+
+* Apache License, Version 2.0 ([`LICENSE-APACHE`](LICENSE-APACHE))
+* MIT license ([`LICENSE-MIT`](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
