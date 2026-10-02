@@ -87,22 +87,15 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: build
-          args: --release --out dist --find-interpreter
-          manylinux: auto
+          # Built on the runner, with the interpreter set up above: exactly one
+          # wheel lands in `dist/` and it genuinely tests this matrix entry,
+          # including the declared 3.9 floor. Portable manylinux wheels are
+          # built by `release.yml`, which is where distribution happens.
+          args: --release --out dist
 
       - name: Install wheel + test deps
         run: |
-          # `--find-interpreter` builds one wheel per CPython available in the
-          # manylinux image, so `dist/` holds every version (cp39 ... cp315).
-          # Installing `dist/*.whl` would therefore fail on the first wheel whose
-          # ABI is not this job's: select the one matching the matrix entry.
-          #
-          # The interpreter tag is repeated in the name (`cp314-cp314`), which
-          # also excludes the free-threaded `cp314-cp314t` build.
-          tag="cp$(python -c 'import sys; print(f"{sys.version_info.major}{sys.version_info.minor}")')"
-          wheel=$(ls dist/*-"$tag"-"$tag"-*.whl)
-          echo "Installing $wheel"
-          pip install --force-reinstall --no-deps "$wheel"
+          pip install --force-reinstall --no-deps dist/*.whl
           pip install numpy pytest
 
       - name: Import smoke test
