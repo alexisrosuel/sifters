@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — classical baselines, the cost of the certificate, and an honest ledger
+
+Prompted by a review pointing out that the criterion is the classical E-optimal
+one. The package now measures itself against the real competitors instead of
+against two weak heuristics, publishes the metric its certificate rests on, and
+records which of its own claims do not reproduce.
+
+- **`scripts/cssp_baselines.py`**: the classical competitors, numpy only, each with
+  the guarantee or the lack of one it actually has - QR with column pivoting,
+  pivoted Cholesky on the Gram (**which is the D-optimal greedy**, and the same
+  pivot rule as QRCP), strong RRQR with Gu & Eisenstat swaps plus its certified
+  floor (made unconditionally valid by evaluating it at the growth factor actually
+  achieved), VIF top-k, the Fedorov exchange, exhaustive `eigvalsh` oracles
+  (forward and backward) and uniform sampling (which *is* the randomized CSSP
+  sampler in this geometry, because unit-norm columns make the norm-based
+  probabilities uniform).
+- **`scripts/compare_cssp.py`**: quality and cost against those competitors, on the
+  scale-free efficiency `eta = lambda_min(R_S) / sigma_K(Z)^2`, where
+  `sigma_K(Z)^2` is the largest value any `K`-subset can reach (Cauchy
+  interlacing). Writes `docs/measurements/compare_cssp.json`.
+- **`scripts/certificate_report.py`**: the cost of the certificate -
+  `exact_evals / candidates`, the fraction of certified steps, the backward
+  `low_rank` sweep, the forward `M`-scaling - writes
+  `docs/measurements/certificate.json`.
+- **`scripts/reproduce_speed.py`**: re-measures the README speed rows with a
+  warmup and best-of-`N`, reports `exact_evals` next to each timing, refuses to
+  time a debug build, and records the claims that do **not** reproduce in its
+  output rather than omitting them (`docs/measurements/speed_ledger.json`).
+- **`tests/test_cssp_baselines.py`** (29 tests): the pivot rules coincide, pivoted
+  Cholesky is the exact D-optimal greedy against brute force, the RRQR floor never
+  exceeds what RRQR achieves over 240 structure/size/`f` combinations, Fedorov
+  returns a local optimum, VIF only certifies ill-conditioning, and - the claim the
+  package rests on - **the certified forward walk reproduces the exhaustive
+  `eigvalsh` oracle** to `<= 1e-15`.
+- **`docs/related-work.md`**: prior art and positioning (E-optimal design,
+  sparse eigenvalue problems, DPPs, RRQR, CSSP) and an explicit list of what is
+  and is not claimed.
+- **`docs/measurements.md`**: every measurement with its protocol, the reference
+  machine, and the measurements that turned out to be unreliable.
+- **`sifters.build_profile()`**: `"release"` or `"debug"`. A plain
+  `maturin develop` (without `--release`) builds an unoptimized extension measured
+  at **~14x slower** with bit-identical results, and it is the most natural
+  command to type. Importing `sifters` now emits a `RuntimeWarning` on a debug
+  build.
+
+### Changed — README repositioned
+
+- The header no longer presents the criterion as this package's contribution: it
+  is the E-optimal criterion of optimal design theory, and `docs/related-work.md`
+  gives the references. The contribution is the **certified exact step** (8
+  evaluations per step, independent of `M`, reproducing the exhaustive greedy),
+  the nested family for every `K`, the anytime certified-gap exact mode, and the
+  extension to any PSD unit-diagonal dependence matrix.
+- Section 4 gains two tables that were missing: the cost of the certificate
+  (forward `M`-scaling and the backward `low_rank` sweep) and quality against the
+  classical competitors, with the honest reading - **no method dominates**, the
+  classical methods win on AR(1), and at `M=200` column-pivoted QR is ~10x faster
+  and within 10-25 % of the quality.
+- The relative-gain table (`x24` to `x30`) is now explicitly marked historical:
+  it compares against a pre-optimization revision that is **absent from the git
+  history**, so `bench/compare.py` has no reference revision to check out and
+  nobody can re-run it.
+- "Known limitations" states plainly that the backward half of the speed table
+  does not reproduce, that the backward certificate prunes weakly (40.8 % of
+  candidates still evaluated at the default `low_rank=4`), that `certified`
+  qualifies a step and never the whole subset, and that strong RRQR's global
+  guarantee is valid but vacuous here (`32x` to `2359x` below what QRCP already
+  achieves).
+
+### Fixed — two documented guarantees that were stated backwards
+
+- **VIF.** The claim that ranking by variance inflation factor bounds
+  `lambda_min(R_S)` was wrong twice over: for PSD `A`,
+  `lambda_max(A) >= max_i A_ii` gives
+  `lambda_min(R) <= 1 / max_j VIF_j`, an *upper* bound, and it concerns the whole
+  `R` because `(R_S)^-1` is not the submatrix of `R^-1`. VIF therefore only
+  certifies ill-conditioning, never a good subset. Corrected in
+  `scripts/cssp_baselines.py` and asserted in the tests.
+- **Strong RRQR.** The Gu & Eisenstat floor is conditional on the growth factor
+  `max |R11^-1 R12|` being `<= f`; an unreachable `f` silently invalidates it (a
+  measured counterexample at `f = 0.05`). `rrqr_bound` is now reported at
+  `f_eff = max(f, growth)` and is valid unconditionally.
+- **The swap loop could cycle.** The bare `|W| > f` test is not monotone;
+  `rrqr_strong` now accepts a swap only if it strictly increases `|det R11|`, with
+  a `4k` cap as a second safety net.
+
+### Removed — stale artifacts from the `minvp` rename
+
+`tests/__pycache__/test_minvp*.pyc`, `target/release/lib_minvp.dylib`,
+`.venv/.../minvp.pth` (a byte-identical duplicate of `sifters.pth`) and
+`.venv/.../minvp-0.1.0.dist-info`. None were tracked; the stale `minvp-*` entries
+left in `target/` are cargo's build cache and are regenerated on any rebuild.
+
 ### Added
 
 - **Nonlinear dependence selection** (section 6 of the README, section 16 of

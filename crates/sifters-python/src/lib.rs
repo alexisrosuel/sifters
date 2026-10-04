@@ -956,10 +956,28 @@ fn matrix_from_python(
 // Module
 // ---------------------------------------------------------------------------
 
+/// Compilation profile of the extension: `"release"` or `"debug"`.
+///
+/// Timings are meaningless on a `debug` build (measured on the reference
+/// machine: about 14x slower than `--release`), and the most natural local
+/// install command, `maturin develop` without `--release`, silently produces
+/// one.  `python/sifters/__init__.py` warns at import time when this reports
+/// `"debug"`, so an accidental debug install cannot quietly invalidate a
+/// benchmark.
+#[pyfunction]
+fn build_profile() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
+
 #[pymodule]
 fn _sifters(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", VERSION)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
+    m.add_function(wrap_pyfunction!(build_profile, m)?)?;
     m.add_class::<Selection>()?;
     m.add_class::<Step>()?;
     m.add("SiftersError", m.py().get_type::<SiftersError>())?;

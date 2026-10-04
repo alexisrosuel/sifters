@@ -12,31 +12,46 @@ regression and downstream models become unstable and their coefficients hard to
 interpret; `sifters` returns the subset that stays as far as possible from
 singularity, for every K, with no labels required.
 
-This is the min-eigenvalue member of the D-optimal / DPP /
-column-subset-selection family - the same greedy structure as maximum-volume
-selection, but the objective is the worst-case direction. Optimal design theory
-calls this criterion **E-optimal** (maximize the minimum eigenvalue of the
-information matrix); on a correlation matrix it reads `sigma_min(Z_S)^2`.
+## What is new here, and what is not
 
-NP-hard problem -> **nested** families built by greedy, but a greedy
-that affords itself the luxury of being **exact and certified**:
+The **criterion is not new**. Maximizing `lambda_min` is the **E-optimal**
+criterion of optimal design theory (Pukelsheim), the same objective as the sparse
+eigenvalue problem (NP-hard, related to densest-`k`-subgraph), and the minimax
+cousin of the D-optimal / determinantal-point-process family whose greedy is
+pivoted Cholesky. `docs/related-work.md` gives the references, and
+`scripts/cssp_baselines.py` implements the classical competitors so the claim can
+be checked rather than asserted.
+
+What this package adds is the *way* the criterion is solved:
 
 | | |
 |---|---|
-| 🎯 **Quality** | secular criterion (and not a mere correlation), up to **+82 %** of `lambda_min` at fixed K vs the naive correlation filter |
-| ✅ **Certificate** | **both directions** of the traversal are certified: backward elimination *and* forward selection stop on a valid upper bound per candidate |
-| 🏁 **Exact mode** | `select(..., exact=True)` **proves** the optimum at the requested K by branch and bound, or returns a certified optimality gap |
-| ⚡ **Speed** | **10 000 variables -> 100 in 0.7 s** (prefilter); the exact certified greedy is **x24 to x30 faster** in forward selection, **x2.5 to x3.5** in backward elimination |
+| 🎯 **Certified step** | candidates are ranked by a valid upper bound and evaluated in decreasing order, stopping as soon as the best realized value beats the largest remaining bound: the step is then **provably the exact greedy step**. Measured cost at `M=200`: **8 candidates out of `M-K` per step (4.6 %)**, and the walk reproduces an exhaustive `eigvalsh` greedy to `<= 1e-15` |
+| 🧬 **One nested family** | `S_1 < S_2 < ... < S_K` for **every** K in a single computation, with a `certified` flag per step - most of the literature answers for one `k` |
+| 🏁 **Anytime exact mode** | `select(..., exact=True)` **proves** the optimum at the requested K by branch and bound, or returns a **certified optimality gap** |
+| 🔗 **Any dependence matrix** | the engine only needs a PSD unit-diagonal matrix, so distance correlation, HSIC, NMI or a Gaussian copula replace the correlation matrix and *every guarantee survives* |
+| ⚡ **Speed** | `10 000` variables -> `100` in `0.6 s` (prefilter); the exact certified greedy is forward-certified rather than exhaustive |
 | 🦀 **Safe Rust** | `#![forbid(unsafe_code)]`, multicore (`rayon`), zero heavy dependencies |
 | 🐍 **Python** | `import sifters; sifters.select(X, k=50)` |
+
+What is **not** claimed: a new criterion, a global guarantee on the greedy family
+(`certified` qualifies a step, never the whole subset), or an approximation ratio
+- E-optimality is not submodular, unlike D-optimality, so no `(1 - 1/e)` exists.
+The measured gap to the brute-force optimum is reported in section 4, as is the
+fact that **no method dominates**: column-pivoted QR, VIF screening and the
+Fedorov exchange win on some structures, `sifters` on others.
 
 <p align="center">
   <img src="docs/img/fig_qualite.png" alt="Quality: lambda_min at fixed K, sifters vs naive heuristics" width="100%">
 </p>
 
-For an equal number of variables, `sifters` keeps a better conditioned subset than the
-"min-max correlation" greedy or the threshold filter - the gap widens when the
-latent structure is rich (factors: **+82 %**, blocks: +15 %, AR(1): +9 %).
+Section 4 compares against the weak heuristics above *and* against the classical
+competitors (pivoted QR / pivoted Cholesky / D-optimal greedy, strong RRQR with
+its global bound, VIF screening, Fedorov exchange, uniform sampling). The gap
+widens when the latent structure is rich (factors: **+12 to +136 %** over the
+classical baselines); on very regular structures such as AR(1), where an
+index-based threshold is already near-optimal, the cheap classical methods win
+and the README says so.
 
 <p align="center">
   <img src="docs/img/fig_performance.png" alt="Performance: scaling and evaluation by the inverse" width="100%">
@@ -55,6 +70,14 @@ pip install .                  # builds the extension via maturin -> import sift
 maturin develop --release
 ```
 
+> ⚠️ **`--release` is not optional for anything performance-related.** A plain
+> `maturin develop` builds an **unoptimized** extension, measured at **~14x
+> slower** than `--release` while producing bit-identical results. It is the most
+> natural command to type, so the package reports what it was built with:
+> `sifters.build_profile()` returns `"release"` or `"debug"`, and importing
+> `sifters` emits a `RuntimeWarning` on a debug build. Reproducible timings in
+> `docs/measurements.md`.
+
 `numpy` is not required at runtime: when present it is only used to convert
 lists and DataFrames into a contiguous `float64` buffer.
 
@@ -65,8 +88,9 @@ CPU explicitly (do not redistribute such a wheel):
 RUSTFLAGS="-C target-cpu=native" maturin develop --release
 ```
 
-> The timings in section 4 were measured with `-C target-cpu=native` on an Apple
-> M1 Max (10 cores).
+> The absolute timings in section 4 were measured with `-C target-cpu=native`;
+> a generic-CPU release build reproduces them within a factor of about 1.3 to
+> 2.5 on the same machine (`docs/measurements.md`).
 
 ### Development environment
 
@@ -154,9 +178,57 @@ and `Ctrl-C` is intercepted during the computation.
 ## 4. Measured results
 
 10-core machine, `-C target-cpu=native`, `f64`. Reproducible with
-`scripts/make_figures.py`, `scripts/compare_baseline.py` and `scripts/bench_numpy.py`.
+`scripts/compare_cssp.py` (quality and cost vs the classical competitors),
+`scripts/certificate_report.py` (the cost of the certificate),
+`scripts/reproduce_speed.py` (the speed ledger), `scripts/make_figures.py`,
+`scripts/compare_baseline.py` and `scripts/bench_numpy.py`. Every number below is
+also in [`docs/measurements.md`](docs/measurements.md), with its measurement
+protocol and - more usefully - with the measurements that turned out to be
+unreliable.
+
+### The cost of the certificate (the actual contribution)
+
+Candidates are ranked by a valid upper bound and evaluated in decreasing order,
+stopping as soon as the best realized value beats the largest remaining bound.
+The step is then **provably the exact greedy step**, and the question is whether
+the bound prunes. Forward walk, `N=400`, `K=1..50`, AR(1) `rho=0.9`:
+
+| M | exact evals / candidates | mean exact evals per step | mean candidates per step | 100 % certified |
+|---|---|---|---|---|
+| 200 | 4.57 % | **8.00** | 175 | yes |
+| 400 | 2.13 % | **8.00** | 375 | yes |
+| 800 | 1.03 % | **8.00** | 775 | yes |
+| 1 600 | 0.51 % | **8.00** | 1 575 | yes |
+| 3 200 | 0.25 % | **8.00** | 3 175 | yes |
+
+The mean number of exact evaluations per step is **8.00 - the batch size -
+independently of M**, while the candidates a naive greedy would have to evaluate
+grow linearly: the relative cost of the certificate decays as `1/M`. On all of
+these walks the certified result equals the exhaustive `eigvalsh` greedy to
+`<= 1e-15`.
+
+**The backward direction is much weaker, and this is stated rather than hidden.**
+The deletion bound depends on the tail of the spectrum:
+
+| `low_rank` p | certified steps | exact evals / candidates | bound excess at winner |
+|---|---|---|---|
+| 1 | 100 % | 82.9 % | 155 % |
+| 4 (default) | 100 % | **40.8 %** | 23 % |
+| 8 | 100 % | 33.6 % | 12 % |
+| 16 | 100 % | 28.8 % | 8.9 % |
+| 32 | 100 % | 26.3 % | 7.4 % |
+
+So the backward cascade saves a factor of about **2.5-3.8** in exact evaluations,
+not orders of magnitude; its value is the certified nested family and the cheap
+warm starts. The forward direction is where the certificate pays. The prefilter,
+incidentally, is not a cheapened certificate: at `M=200` it evaluates 16 or 32
+candidates per step against 8 for the certified mode, so it is dominated there -
+its advantage appears only at large `M`, where the exact bound (`p = K`) becomes
+the dominant cost.
 
 ### Quality (exact lambda_min, computed in numpy)
+
+Against the two heuristics the package historically compared to:
 
 | dataset | K | **sifters forward** | min-max corr. greedy | threshold filter |
 |---|---|---|---|---|
@@ -175,6 +247,66 @@ remains competitive on a very regular structure (AR(1) at small K). `sifters` wi
 majority of cases, very widely when the latent structure is rich, and additionally brings
 certification and the complete family.
 
+### Quality against the classical competitors
+
+Those two heuristics are the weak ones. A numerical-linear-algebra reviewer
+reaches for column-pivoted QR, strong RRQR, VIF screening and the Fedorov
+exchange; all four are implemented in `scripts/cssp_baselines.py`. Quality is
+reported as the scale-free **efficiency** `eta = lambda_min(R_S) / sigma_K(Z)^2`,
+where `sigma_K(Z)^2` is the largest value *any* `K`-subset can reach (Cauchy
+interlacing), so `eta <= 1` and is comparable across datasets. `N=400`, `M=200`:
+
+| structure | method | K=5 | K=15 | K=30 |
+|---|---|---|---|---|
+| iid | `sifters` forward | 0.375 | **0.375** | **0.385** |
+| | QRCP = pivoted Cholesky = D-opt | 0.373 | 0.373 | 0.363 |
+| | Fedorov exchange | **0.381** | 0.357 | 0.356 |
+| | VIF top-k | 0.345 | 0.320 | 0.345 |
+| AR(1) rho=0.9 | `sifters` forward | 0.074 | 0.146 | 0.252 |
+| | QRCP = pivoted Cholesky = D-opt | 0.072 | **0.161** | **0.258** |
+| | Fedorov exchange | **0.075** | **0.166** | 0.155 |
+| | threshold filter | n/a | 0.153 | 0.248 |
+| blocks | `sifters` forward | 0.044 | **0.431** | **0.407** |
+| | QRCP = pivoted Cholesky = D-opt | 0.042 | 0.392 | 0.337 |
+| | Fedorov exchange | **0.044** | 0.398 | 0.355 |
+| factors (rank 6) | `sifters` forward | 0.036 | **0.557** | 0.540 |
+| | QRCP = pivoted Cholesky = D-opt | 0.032 | 0.455 | 0.463 |
+| | Fedorov exchange | **0.037** | 0.318 | 0.236 |
+| | VIF top-k | 0.027 | 0.518 | **0.560** |
+
+**No method dominates.** That is the honest summary, and each row of it matters:
+
+* `sifters` forward wins where the latent structure is rich - factors `0.557`
+  against `0.455` for QRCP (+22 %) and `0.318` for Fedorov (+75 %) at `K=15`;
+  blocks `0.407` against `0.337` (+21 %) and `0.355` (+15 %) at `K=30` - and is
+  best or within 2 % of best on iid at every K;
+* **it loses on very regular structures.** On AR(1), QRCP and Fedorov win. An
+  AR(1) chain's well-conditioned subset is essentially an arithmetic progression
+  of indices, which an index-based threshold finds directly: the structure does
+  the work, not the algorithm;
+* `K=5` is decided by a **tie**, not by the criterion - all singletons have
+  `lambda_min = 1` - which is why Fedorov and min-max win there by 3-8 %, and why
+  `forward_seeds` exists;
+* the classical textbook diagnostic, **VIF top-k, is dominated** on three of four
+  structures (catastrophically on blocks at `K=5`: `0.005` against `0.042`). This
+  is not bad luck: `VIF_j` is `(R^-1)_jj` for the **whole** matrix, and
+  `(R_S)^-1` is not the submatrix of `R^-1`, so no VIF says anything about
+  `lambda_min(R_S)`. It gives the one-sided bound
+  `lambda_min(R) <= 1 / max_j VIF_j`, i.e. a large VIF certifies ill-conditioning
+  and a small one certifies nothing;
+* **strong RRQR's global guarantee is valid but vacuous.** Its bound
+  `sigma_k(Z)^2 / (1 + f^2 k (M-k))` holds (asserted over 240 structure/size/`f`
+  combinations) and sits **32x to 2359x** below what plain column-pivoted QR
+  already achieves at `M=200`: it guarantees `eta >= 0.001` where the algorithm
+  reaches `0.03` to `0.46`. A worst-case statement that does not bite is not a
+  substitute for a statement about the cost of exactness.
+
+The consequence for a user is blunt and worth stating: at `M=200`,
+**column-pivoted QR is 10x faster than `sifters` and within 10-25 % of its
+quality**. Reach for `sifters` when you need the certificate, the whole nested
+family for every K, the exact mode, or a non-linear dependence matrix - not for a
+raw quality win on an easy structure.
+
 ### Speed
 
 The table gives the **default exact mode** (no prefilter), that is, the
@@ -186,11 +318,24 @@ The table gives the **default exact mode** (no prefilter), that is, the
 | forward, M=3 200, K=50 | **0.8 s** | 392 |
 | forward, M=1 600, K=150 | **8.4 s** | 1 192 |
 | forward, M=10 000 (N=50), K=100, `prefilter=True` | 0.74 s | 1 584 |
-| full backward, M=200 | **0.85 s** | 6 235 |
-| backward, M=500, kmin=200, `eval="inverse"` | **14.6 s** | 38 392 |
+| full backward, M=200 | **0.85 s** ⚠️ | 6 235 ⚠️ |
+| backward, M=500, kmin=200, `eval="inverse"` | **14.6 s** ⚠️ | 38 392 ⚠️ |
 | same, `eval="direct"` **converged** (300 iter.) | **102 s** | 33 976 |
 
-**Measured gain vs the original version** (same inputs, `verify=False`, `max_exact=0`,
+> ⚠️ **The two backward rows above do not reproduce, and the table below cannot
+> be reproduced at all.** See [`docs/measurements.md`](docs/measurements.md)
+> section 5. Measured with `scripts/reproduce_speed.py`, the four **forward** rows
+> hold with margin (0.14x to 0.62x of the claimed time, `exact_evals` matching
+> exactly), but the backward rows perform **29 % and 48 % more exact evaluations**
+> than stated - a deterministic count, so not a machine effect - and take 1.55x
+> and 1.92x longer. The relative gains below compare against a pre-optimization
+> revision that is **absent from the git history** (three commits, all from the
+> same day, the oldest already being the optimization commit), so
+> `bench/compare.py` has no reference revision to check out: nobody can re-run
+> them, including me. Treat them as historical.
+
+**Measured gain vs the original version** (historical; the "before" revision is
+not in this repository - same inputs, `verify=False`, `max_exact=0`,
 `forward_top=0`):
 
 | scenario | before | after | gain (1 core) |
@@ -607,15 +752,28 @@ scripts/
   make_figures.py       generates the quality / performance README figures
   bench_numpy.py        timing vs naive numpy greedy (docs/img/fig_temps_vs_numpy.png)
   compare_baseline.py   quality/time comparison vs naive baselines (+ shared make_data)
+  cssp_baselines.py     the classical competitors: QRCP, pivoted Cholesky (= D-optimal
+                        greedy), strong RRQR + its certified floor, VIF top-k, Fedorov
+                        exchange, exhaustive eig-oracles, uniform sampling
+  compare_cssp.py       quality/cost vs those competitors, on the scale-free
+                        efficiency eta = lambda_min / sigma_K(Z)^2
+  certificate_report.py the cost of the certificate: exact evals / candidates,
+                        backward p-sweep, forward M-scaling
+  reproduce_speed.py    re-measures the README speed rows and records the claims
+                        that do NOT reproduce (docs/measurements/speed_ledger.json)
   independence_recovery.py  ground-truth demo (recover the independent features)
   make_recovery_figures.py  generates docs/img/fig_recovery_*.png (needs matplotlib)
 tests/
   test_sifters.py         binding tests (numpy as oracle)
+  test_cssp_baselines.py  invariants of the competitors + the certification claim
   test_dependence.py    tests of the nonlinear dependence extension
   test_independence_recovery.py  ground-truth recovery tests
 bench/        Python benchmark harnesses (see bench/README.md)
 docs/
   algorithm.md          the algorithm in detail (formulas, bounds, invariants)
+  measurements.md       every measurement, its protocol, and what is unreliable
+  related-work.md       prior art, positioning, what is and is not claimed
+  measurements/         raw JSON of the runs quoted in measurements.md
   python_api.md         full Python API reference
   img/                  README figures + raw measurements
 examples/
@@ -628,6 +786,11 @@ pixi.toml               dev environment + tasks
 
 - [`docs/algorithm.md`](docs/algorithm.md) - the algorithm in detail (formulas,
   bounds, certification, invariants, parameters);
+- [`docs/related-work.md`](docs/related-work.md) - prior art and positioning: what
+  belongs to E-optimal design theory, sparse eigenvalue problems, DPPs, RRQR and
+  CSSP, and what this package actually claims;
+- [`docs/measurements.md`](docs/measurements.md) - every measurement, its protocol,
+  the reference machine, and the measurements that turned out to be unreliable;
 - [`docs/python_api.md`](docs/python_api.md) - full Python API reference;
 - [`bench/README.md`](bench/README.md) - benchmark harnesses and scenarios;
 - [`bench/final_report.md`](bench/final_report.md) - historical exact-path
@@ -636,6 +799,41 @@ pixi.toml               dev environment + tasks
 
 ## 9. Known limitations
 
+* **`--release` is mandatory for any timing.** A plain `maturin develop` builds an
+  unoptimized extension measured at ~14x slower with bit-identical results. The
+  package now reports it (`sifters.build_profile()`), and importing `sifters`
+  warns on a debug build - but the trap is easy to fall into
+  (`docs/measurements.md` trap 1).
+* **The backward half of the speed table does not reproduce.**
+  `scripts/reproduce_speed.py` shows the package performing 29 % and 48 % more
+  exact evaluations than the README's backward rows claim - a deterministic count,
+  so it is a configuration or revision difference, not a machine effect. The
+  forward rows do reproduce (0.14x-0.62x of the claimed time). The `x24`-`x30`
+  relative gains compare against a revision absent from the git history and cannot
+  be re-run by anyone (`docs/measurements.md` section 5).
+* **No method dominates, and `sifters` loses on regular structures.** On AR(1),
+  column-pivoted QR and the Fedorov exchange beat it; at `M=200` QRCP is ~10x
+  faster and within 10-25 % of its quality. The wins are on rich latent structure
+  (factors, blocks) and on what the cheap methods cannot provide: the certificate,
+  the nested family for every K, the exact mode, the non-linear dependence
+  matrices (section 4).
+* **The backward certificate prunes weakly.** At the default `low_rank=4` it still
+  evaluates 40.8 % of the candidates (26.3 % at `p=32`), so the cascade saves only
+  a factor of ~2.5-3.8. The forward certificate is the one that pays: 8 evaluations
+  per step, independent of `M` (`docs/algorithm.md` section 12 anticipated this
+  from the bound's `1/p` decay).
+* **Global guarantees are not what `certified` means.** It qualifies a *step*,
+  never the whole subset. E-optimality is neither monotone nor submodular in the
+  subset - unlike D-optimality, which has a `(1 - 1/e)` bound - so no
+  approximation ratio is claimed and the measured gap to the brute-force optimum is
+  a structure-dependent 1-13 % forward and 10-30 % backward.
+* **Strong RRQR's global guarantee is valid but vacuous here**: `32x` to `2359x`
+  below what column-pivoted QR already achieves at `M=200`. Citing it as a
+  competitor's advantage would be citing a bound that does not bite
+  (`docs/measurements.md` section 3).
+* **VIF top-k has no subset guarantee.** `VIF_j = (R^-1)_jj` describes the whole
+  matrix; it yields only `lambda_min(R) <= 1 / max_j VIF_j`, so a small VIF
+  certifies nothing about `lambda_min(R_S)`.
 * **Singular case (`M > N`)**: no inverse -> direct evaluations at 60-200 iterations.
   A suitable preconditioner remains to be found.
 * **Myopic greedy**: the nested family is not globally optimal;
@@ -649,8 +847,11 @@ pixi.toml               dev environment + tasks
   or increase `iters_warm`).
 * **Python binding**: native PyO3 extension (`crates/sifters-python`), GIL released during
   the computation; installation requires a Rust build chain (`maturin`, see section 1).
-* **Forward prefilter**: explicit heuristic, disabled by default; enabling it
-  speeds up large `M` but can shave `lambda_min` by 4 to 12 % (section 4).
+* **Forward prefilter**: explicit heuristic, disabled by default. It is not a
+  cheapened certificate - at `M=200` it evaluates *more* candidates (16 or 32)
+  than the certified mode (8) and gives up the guarantee. Its advantage appears
+  only at large `M`, where the exact bound becomes the dominant cost, and it can
+  shave `lambda_min` by 4 to 12 % (section 4).
 * **Exact mode**: it targets a single `K` and breaks the "whole family in one
   pass" promise, so the nested `curve`/`steps` still come from the greedy walk
   that seeded it. The worst case is exponential and the cost is driven by `K`:

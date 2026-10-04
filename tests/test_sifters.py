@@ -442,6 +442,20 @@ def test_to_dict_is_consistent():
     json.dumps(d)  # serializable as is
 
 
+def test_build_profile_is_reported():
+    """The extension must announce the profile it was compiled with.
+
+    A debug build is about 14x slower, and `maturin develop` without `--release`
+    produces one silently, which invalidates every timing.  This test does not
+    fail on a debug build (that is a legitimate development state, and
+    ``import sifters`` already warns about it); it fails only when the profile is
+    not reported at all or is not stable.
+    """
+    profile = sifters.build_profile()
+    assert profile in {"release", "debug"}
+    assert sifters.build_profile() == profile
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

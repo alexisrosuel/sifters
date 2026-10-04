@@ -4,6 +4,7 @@ from typing import Any, Callable, Optional
 
 __version__: str
 
+
 class SiftersError(RuntimeError): ...
 
 class Step:
@@ -52,6 +53,10 @@ class Selection:
     def to_dict(self) -> dict[str, Any]: ...
     def __len__(self) -> int: ...
     def __repr__(self) -> str: ...
+
+def build_profile() -> str:
+    """Compilation profile of the extension: ``"release"`` or ``"debug"``."""
+    ...
 
 def run(
     x: Any,

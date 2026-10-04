@@ -1,0 +1,150 @@
+{
+ "build_profile": "release",
+ "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+ "reps": 3,
+ "rows": [
+  {
+   "M": 400,
+   "N": 500,
+   "all_seconds": [
+    0.05395999999745982,
+    0.053646791002393,
+    0.05530070800159592
+   ],
+   "exact_evals": 392,
+   "exact_evals_match": true,
+   "kind": "ar",
+   "kwargs": {
+    "direction": "forward",
+    "k": 50
+   },
+   "label": "forward, M=400, K=50",
+   "measured_seconds": 0.053646791002393,
+   "ratio": 0.268233955011965,
+   "readme_exact_evals": 392,
+   "readme_seconds": 0.2
+  },
+  {
+   "M": 3200,
+   "N": 500,
+   "all_seconds": [
+    0.49722449999899254,
+    0.48843679199853796,
+    0.49427358400134835
+   ],
+   "exact_evals": 392,
+   "exact_evals_match": true,
+   "kind": "ar",
+   "kwargs": {
+    "direction": "forward",
+    "k": 50
+   },
+   "label": "forward, M=3200, K=50",
+   "measured_seconds": 0.48843679199853796,
+   "ratio": 0.6105459899981724,
+   "readme_exact_evals": 392,
+   "readme_seconds": 0.8
+  },
+  {
+   "M": 1600,
+   "N": 400,
+   "all_seconds": [
+    1.1470985409978312,
+    1.2716686249987106,
+    1.1298128749986063
+   ],
+   "exact_evals": 1192,
+   "exact_evals_match": true,
+   "kind": "ar",
+   "kwargs": {
+    "direction": "forward",
+    "k": 150
+   },
+   "label": "forward, M=1600, K=150",
+   "measured_seconds": 1.1298128749986063,
+   "ratio": 0.1345015327379293,
+   "readme_exact_evals": 1192,
+   "readme_seconds": 8.4
+  },
+  {
+   "M": 10000,
+   "N": 50,
+   "all_seconds": [
+    0.7910438340004475,
+    0.7650794169967412,
+    0.739864375002071
+   ],
+   "exact_evals": 1584,
+   "exact_evals_match": true,
+   "kind": "iid",
+   "kwargs": {
+    "direction": "forward",
+    "k": 100,
+    "prefilter": true
+   },
+   "label": "forward, M=10000, N=50, K=100, prefilter",
+   "measured_seconds": 0.739864375002071,
+   "ratio": 0.9998167229757716,
+   "readme_exact_evals": 1584,
+   "readme_seconds": 0.74
+  },
+  {
+   "M": 200,
+   "N": 500,
+   "all_seconds": [
+    1.282158417001483,
+    1.356033790998481,
+    1.2527530420011317
+   ],
+   "exact_evals": 8027,
+   "exact_evals_match": false,
+   "kind": "ar",
+   "kwargs": {
+    "direction": "backward",
+    "kmin": 1
+   },
+   "label": "full backward, M=200",
+   "measured_seconds": 1.2527530420011317,
+   "ratio": 1.4738271082366257,
+   "readme_exact_evals": 6235,
+   "readme_seconds": 0.85
+  },
+  {
+   "M": 500,
+   "N": 600,
+   "all_seconds": [
+    28.671187334002752,
+    29.655494833001285,
+    28.90640916600023
+   ],
+   "exact_evals": 56640,
+   "exact_evals_match": false,
+   "kind": "ar",
+   "kwargs": {
+    "direction": "backward",
+    "eval": "inverse",
+    "kmin": 200
+   },
+   "label": "backward, M=500, kmin=200, eval=inverse",
+   "measured_seconds": 28.671187334002752,
+   "ratio": 1.9637799543837502,
+   "readme_exact_evals": 38392,
+   "readme_seconds": 14.6
+  }
+ ],
+ "unreproducible": [
+  {
+   "claim": "forward, M=400, K=50 : x24 gain vs the original version",
+   "reason": "the pre-optimization revision is absent from the git history (3 commits, all from the same day, the oldest already being the optimization commit), so bench/compare.py has no ref revision to check out"
+  },
+  {
+   "claim": "forward, M=800, K=50 : x28 ; forward, M=3200, K=50 : x30",
+   "reason": "same reason"
+  },
+  {
+   "claim": "full backward, M=200 : x2.8 ; backward M=500 kmin=200 : x2.5",
+   "reason": "same reason"
+  }
+ ],
+ "warmup": true
+}

@@ -39,16 +39,19 @@ from __future__ import annotations
 
 import array
 import os
+import warnings
 from typing import Any, Callable, Optional
 
 from . import _sifters
 from ._sifters import SiftersError, Selection, Step, __version__
+from ._sifters import build_profile as _native_build_profile
 
 __all__ = [
     "select",
     "path",
     "curve",
     "as_matrix",
+    "build_profile",
     "dependence_matrix",
     "select_from_dependence",
     "select_dependence",
@@ -60,6 +63,19 @@ __all__ = [
     "version",
     "__version__",
 ]
+
+# A debug build is about 14x slower than a release build (measured on the
+# reference machine), and `maturin develop` without `--release` produces one
+# silently.  Timings taken against it are meaningless, so say so loudly instead
+# of letting a benchmark be wrong without knowing it.
+if _native_build_profile() == "debug":
+    warnings.warn(
+        "sifters is installed as a DEBUG build (about 14x slower than release): "
+        "performance measurements are meaningless. Reinstall with "
+        "`maturin develop --release`.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 #: Submodules loaded on demand (they need numpy, which is optional for the
 #: core engine).
@@ -95,6 +111,17 @@ def __getattr__(name: str) -> Any:
 def version() -> str:
     """Engine version (same as ``sifters.__version__``)."""
     return __version__
+
+
+def build_profile() -> str:
+    """Compilation profile of the extension: ``"release"`` or ``"debug"``.
+
+    A debug build (``maturin develop`` without ``--release``) is about 14x slower
+    than a release build; any timing measured against it is meaningless.  This
+    is why importing ``sifters`` emits a :class:`RuntimeWarning` when the profile
+    is ``"debug"``.
+    """
+    return _native_build_profile()
 
 
 # ---------------------------------------------------------------------------
